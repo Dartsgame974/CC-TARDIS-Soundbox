@@ -1,4 +1,4 @@
--- TARDIS SOUNDBOARD v2.0 - Streaming avec AUKit
+-- ARTRON OS TYPE 40 - TARDIS SOUNDBOARD v3.0
 -- Interface terminal native pour ComputerCraft/CC:Tweaked
 
 local BASE_URL = "https://github.com/Dartsgame974/CC-TARDIS-Soundbox/raw/refs/heads/main/dfpwm/"
@@ -11,7 +11,6 @@ local SOUNDS = {
     flight = "tardis_flight_loop.dfpwm",
     bip = "bip_sound_error_1.dfpwm",
     short_flight = "short_flight.dfpwm",
-    emergency = "emergencyshutdown.dfpwm",
     landing = "landing.dfpwm",
     takeoff = "tardistakeoff.dfpwm",
     denied = "denied_flight.dfpwm",
@@ -24,18 +23,9 @@ local SOUNDS = {
 -- État global
 local state = {
     powered = false,
-    ambiance = false,
-    flight = false,
-    cloister = false,
-    bip = false,
-    speakers = {}
-}
-
--- Contrôle des loops et audio
-local audioControl = {
-    currentLoop = nil,
-    stopLoop = false,
-    queue = {}
+    currentLoop = nil, -- ambiance, flight, cloister, ou bip
+    speakers = {},
+    playing = false
 }
 
 local aukit = nil
@@ -89,58 +79,27 @@ local function findSpeakers()
     return speakers
 end
 
-local function playAudioStream(url, loop, controlKey)
+-- Jouer un son unique (non-loop)
+local function playSound(soundKey, callback)
     if #state.speakers == 0 then
+        if callback then callback() end
         return
     end
     
-    -- Streaming HTTP
-    local response = http.get(url, nil, true)
-    if not response then
-        print("Erreur: impossible de streamer " .. url)
-        return
-    end
-    
-    repeat
-        local audio = aukit.stream.dfpwm(function()
-            return response.read(48000)
-        end)
-        
-        -- Lecture sur tous les speakers
-        for chunk in audio do
-            if controlKey and not audioControl[controlKey] then
-                response.close()
-                return
-            end
-            
-            for _, speaker in ipairs(state.speakers) do
-                while not speaker.playAudio(chunk) do
-                    os.pullEvent("speaker_audio_empty")
-                end
-            end
-        end
-        
-        response.close()
-        
-        -- Si c'est une boucle, on recommence
-        if loop and controlKey and audioControl[controlKey] then
-            response = http.get(url, nil, true)
-        end
-    until not loop or not audioControl[controlKey] or not response
-    
-    if response then
-        response.close()
-    end
+    state.playing = true
+    os.queueEvent("_play_sound", soundKey, callback)
 end
 
-local function queueAudio(soundKey, loop, callback)
-    table.insert(audioControl.queue, {
-        url = BASE_URL .. SOUNDS[soundKey],
-        loop = loop,
-        controlKey = loop and soundKey or nil,
-        callback = callback
-    })
-    os.queueEvent("_audio_queue")
+-- Démarrer une loop (arrête toute autre loop en cours)
+local function startLoop(loopKey)
+    state.currentLoop = loopKey
+    state.playing = true
+    os.queueEvent("_start_loop", loopKey)
+end
+
+-- Arrêter la loop actuelle
+local function stopLoop()
+    state.currentLoop = nil
 end
 
 -- ========================================
@@ -149,45 +108,90 @@ end
 
 local function audioThread()
     while true do
-        os.pullEvent("_audio_queue")
+        local event, param1, param2 = os.pullEvent()
         
-        while #audioControl.queue > 0 do
-            local item = table.remove(audioControl.queue, 1)
+        if event == "_play_sound" then
+            local soundKey = param1
+            local callback = param2
             
-            if item.loop then
-                audioControl[item.controlKey] = true
-                state[item.controlKey] = true
+            local url = BASE_URL .. SOUNDS[soundKey]
+            local response = http.get(url, nil, true)
+            
+            if response then
+                local audio = aukit.stream.dfpwm(function()
+                    return response.read(48000)
+                end)
+                
+                for chunk in audio do
+                    -- Vérifier si on doit arrêter
+                    if state.currentLoop then
+                        response.close()
+                        state.playing = false
+                        os.queueEvent("_redraw")
+                        break
+                    end
+                    
+                    for _, speaker in ipairs(state.speakers) do
+                        while not speaker.playAudio(chunk) do
+                            os.pullEvent("speaker_audio_empty")
+                        end
+                    end
+                end
+                
+                response.close()
+                state.playing = false
+                os.queueEvent("_redraw")
+                
+                -- Callback après la fin du son
+                if callback then
+                    callback()
+                end
             end
             
-            playAudioStream(item.url, item.loop, item.controlKey)
+        elseif event == "_start_loop" then
+            local loopKey = param1
             
-            if item.callback then
-                item.callback()
+            -- Boucle infinie tant que c'est la loop active
+            while state.currentLoop == loopKey do
+                local url = BASE_URL .. SOUNDS[loopKey]
+                local response = http.get(url, nil, true)
+                
+                if response then
+                    local audio = aukit.stream.dfpwm(function()
+                        return response.read(48000)
+                    end)
+                    
+                    for chunk in audio do
+                        -- Vérifier si on doit arrêter cette loop
+                        if state.currentLoop ~= loopKey then
+                            response.close()
+                            break
+                        end
+                        
+                        for _, speaker in ipairs(state.speakers) do
+                            while not speaker.playAudio(chunk) do
+                                if state.currentLoop ~= loopKey then
+                                    response.close()
+                                    break
+                                end
+                                os.pullEvent("speaker_audio_empty")
+                            end
+                        end
+                    end
+                    
+                    response.close()
+                else
+                    break
+                end
+                
+                -- Petite pause avant de reboucler
+                sleep(0.05)
             end
+            
+            state.playing = false
+            os.queueEvent("_redraw")
         end
     end
-end
-
--- ========================================
--- CONTRÔLE DES LOOPS
--- ========================================
-
-local function startLoop(soundKey)
-    if not audioControl[soundKey] then
-        queueAudio(soundKey, true)
-    end
-end
-
-local function stopLoop(soundKey)
-    audioControl[soundKey] = false
-    state[soundKey] = false
-end
-
-local function stopAllLoops()
-    stopLoop("ambiance")
-    stopLoop("flight")
-    stopLoop("cloister")
-    stopLoop("bip")
 end
 
 -- ========================================
@@ -198,7 +202,8 @@ local function tardisStartup()
     if state.powered then return end
     state.powered = true
     
-    queueAudio("startup", false, function()
+    -- Jouer startup, puis lancer ambiance
+    playSound("startup", function()
         startLoop("ambiance")
     end)
 end
@@ -206,8 +211,9 @@ end
 local function tardisDematerialization()
     if not state.powered then return end
     
-    stopLoop("ambiance")
-    queueAudio("takeoff", false, function()
+    -- Arrêter toute loop, jouer takeoff, puis flight loop
+    stopLoop()
+    playSound("takeoff", function()
         startLoop("flight")
     end)
 end
@@ -215,27 +221,45 @@ end
 local function tardisLanding()
     if not state.powered then return end
     
-    stopLoop("flight")
-    queueAudio("landing", false, function()
+    -- Arrêter flight, jouer landing, puis ambiance
+    stopLoop()
+    playSound("landing", function()
         startLoop("ambiance")
     end)
 end
 
 local function tardisDeniedFlight()
     if not state.powered then return end
-    queueAudio("denied", false)
+    
+    -- Sauvegarder la loop actuelle
+    local previousLoop = state.currentLoop
+    stopLoop()
+    
+    playSound("denied", function()
+        if previousLoop then
+            startLoop(previousLoop)
+        end
+    end)
 end
 
 local function tardisShortFlight()
     if not state.powered then return end
-    queueAudio("short_flight", false)
+    
+    local previousLoop = state.currentLoop
+    stopLoop()
+    
+    playSound("short_flight", function()
+        if previousLoop then
+            startLoop(previousLoop)
+        end
+    end)
 end
 
 local function tardisShutdown()
     if not state.powered then return end
     
-    stopAllLoops()
-    queueAudio("shutdown", false, function()
+    stopLoop()
+    playSound("shutdown", function()
         state.powered = false
     end)
 end
@@ -243,9 +267,11 @@ end
 local function toggleCloister()
     if not state.powered then return end
     
-    if state.cloister then
-        stopLoop("cloister")
+    if state.currentLoop == "cloister" then
+        stopLoop()
+        startLoop("ambiance")
     else
+        stopLoop()
         startLoop("cloister")
     end
 end
@@ -253,21 +279,39 @@ end
 local function toggleBip()
     if not state.powered then return end
     
-    if state.bip then
-        stopLoop("bip")
+    if state.currentLoop == "bip" then
+        stopLoop()
+        startLoop("ambiance")
     else
+        stopLoop()
         startLoop("bip")
     end
 end
 
 local function doorOpen()
     if not state.powered then return end
-    queueAudio("door_open", false)
+    
+    local previousLoop = state.currentLoop
+    stopLoop()
+    
+    playSound("door_open", function()
+        if previousLoop then
+            startLoop(previousLoop)
+        end
+    end)
 end
 
 local function doorClose()
     if not state.powered then return end
-    queueAudio("door_close", false)
+    
+    local previousLoop = state.currentLoop
+    stopLoop()
+    
+    playSound("door_close", function()
+        if previousLoop then
+            startLoop(previousLoop)
+        end
+    end)
 end
 
 -- ========================================
@@ -278,11 +322,11 @@ local function drawButton(x, y, width, text, active)
     term.setCursorPos(x, y)
     
     if active then
-        term.setBackgroundColor(colors.lime)
-        term.setTextColor(colors.black)
+        term.setBackgroundColor(colors.orange)
+        term.setTextColor(colors.white)
     else
         term.setBackgroundColor(colors.gray)
-        term.setTextColor(colors.white)
+        term.setTextColor(colors.lightGray)
     end
     
     local padding = math.floor((width - #text) / 2)
@@ -302,9 +346,9 @@ local function drawInterface()
     term.clear()
     
     -- Titre
-    term.setCursorPos(math.floor(w/2 - 10), 2)
-    term.setTextColor(colors.blue)
-    term.write("TARDIS SOUNDBOARD v2")
+    term.setCursorPos(math.floor(w/2 - 12), 2)
+    term.setTextColor(colors.orange)
+    term.write("ARTRON OS TYPE 40")
     
     -- Statut
     term.setCursorPos(2, 4)
@@ -321,46 +365,39 @@ local function drawInterface()
     
     -- Boutons principaux
     term.setTextColor(colors.white)
-    drawButton(2, 7, 14, "POWER ON", false)
+    drawButton(2, 7, 14, "POWER ON", state.powered and not state.playing)
     drawButton(18, 7, 14, "POWER OFF", false)
     
-    drawButton(2, 9, 14, "DEPART", state.powered)
+    drawButton(2, 9, 14, "DEPART", state.powered and state.currentLoop == "flight")
     drawButton(18, 9, 14, "ATTERRIR", state.powered)
     
     drawButton(2, 11, 14, "VOL COURT", state.powered)
     drawButton(18, 11, 14, "VOL REFUSE", state.powered)
     
     -- Toggles
-    drawButton(2, 13, 14, "CLOISTER", state.cloister)
-    drawButton(18, 13, 14, "BIP ERREUR", state.bip)
+    drawButton(2, 13, 14, "CLOISTER", state.powered and state.currentLoop == "cloister")
+    drawButton(18, 13, 14, "BIP ERREUR", state.powered and state.currentLoop == "bip")
     
     -- Portes
     drawButton(2, 15, 14, "OUVRIR", state.powered)
     drawButton(18, 15, 14, "FERMER", state.powered)
     
-    -- État des loops
+    -- État de la loop active
     term.setCursorPos(2, 17)
-    term.setTextColor(colors.yellow)
-    term.write("Loops actives:")
-    
-    term.setCursorPos(2, 18)
+    term.setTextColor(colors.orange)
+    term.write("Loop active: ")
     term.setTextColor(colors.white)
-    if state.ambiance then term.write("[Ambiance] ") end
-    if state.flight then term.write("[Vol] ") end
-    if state.cloister then term.write("[Cloister] ") end
-    if state.bip then term.write("[Bip] ") end
-    
-    -- File d'attente
-    term.setCursorPos(2, 19)
-    term.setTextColor(colors.lightGray)
-    if #audioControl.queue > 0 then
-        term.write("File: " .. #audioControl.queue .. " son(s)")
+    if state.currentLoop then
+        term.write(state.currentLoop:upper())
+    else
+        term.setTextColor(colors.gray)
+        term.write("Aucune")
     end
     
     -- Instructions
     term.setCursorPos(2, h - 1)
     term.setTextColor(colors.lightGray)
-    term.write("Streaming audio via AUKit - Cliquez pour controler")
+    term.write("Streaming audio via AUKit - Un seul son a la fois")
 end
 
 local function handleClick(x, y)
@@ -385,6 +422,8 @@ local function handleClick(x, y)
     elseif isClickInButton(x, y, 18, 15, 14) then
         doorClose()
     end
+    
+    drawInterface()
 end
 
 local function interfaceLoop()
@@ -395,10 +434,9 @@ local function interfaceLoop()
         
         if event == "mouse_click" then
             handleClick(x, y)
-            drawInterface()
         elseif event == "term_resize" then
             drawInterface()
-        elseif event == "_audio_queue" then
+        elseif event == "_redraw" then
             drawInterface()
         end
     end
@@ -412,20 +450,26 @@ local function main()
     term.clear()
     term.setCursorPos(1, 1)
     
-    print("=" .. string.rep("=", 40))
-    print(" TARDIS SOUNDBOARD v2.0 - Streaming")
-    print("=" .. string.rep("=", 40))
+    term.setTextColor(colors.orange)
+    print("=" .. string.rep("=", 45))
+    print(" ARTRON OS TYPE 40 - TARDIS SOUNDBOARD v3.0")
+    print("=" .. string.rep("=", 45))
+    term.setTextColor(colors.white)
     print("")
     
     -- Initialisation AUKit
     print("Initialisation d'AUKit...")
     if not initAukit() then
+        term.setTextColor(colors.red)
         print("ERREUR: Impossible d'initialiser AUKit")
+        term.setTextColor(colors.white)
         print("Appuyez sur une touche pour quitter...")
         os.pullEvent("key")
         return
     end
+    term.setTextColor(colors.lime)
     print("AUKit charge!")
+    term.setTextColor(colors.white)
     
     -- Recherche des haut-parleurs
     print("")
@@ -433,13 +477,17 @@ local function main()
     state.speakers = findSpeakers()
     
     if #state.speakers == 0 then
+        term.setTextColor(colors.red)
         print("ATTENTION: Aucun haut-parleur trouve!")
+        term.setTextColor(colors.white)
         print("Connectez un haut-parleur et redemarrez.")
         print("")
         print("Appuyez sur une touche pour continuer quand meme...")
         os.pullEvent("key")
     else
+        term.setTextColor(colors.lime)
         print("Trouve: " .. #state.speakers .. " haut-parleur(s)")
+        term.setTextColor(colors.white)
         sleep(1)
     end
     
