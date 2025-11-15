@@ -1,9 +1,7 @@
 -- Artron OS – Type 40 (TARDIS Soundbox)
 -- Interface graphique orange sur noir avec boutons cliquables
--- Sons streamés depuis GitHub avec Austream
+-- Sons streamés depuis GitHub via shell.run("austream", url")
 
-local austream = require("austream")
-local aukit = require("aukit")
 local speaker = peripheral.find("speaker")
 if not speaker then
     error("Aucun speaker trouvé !")
@@ -26,74 +24,59 @@ local sounds = {
 }
 
 -- État des sons
-local ambianceHandle
-local flightHandle
-local errorHandle
-local errorActive = false
-local shutdownPressCount = 0
+local ambianceRunning = false
+local flightRunning = false
 
--- Fonctions utilitaires
+-- Fonctions de lecture
 local function playOnce(url)
-    return austream(url, {speaker = speaker, loop = false})
+    shell.run("austream", url)
 end
 
 local function playLoop(url)
-    return austream(url, {speaker = speaker, loop = true})
-end
-
-local function stopHandle(handle)
-    if handle then handle:stop() end
+    -- Boucle simple : on lance austream en parallèle pour simuler le loop
+    local running = true
+    local co = coroutine.create(function()
+        while running do
+            shell.run("austream", url)
+            os.sleep(0.1)
+        end
+    end)
+    coroutine.resume(co)
+    return function() running = false end -- retourne une fonction pour arrêter la boucle
 end
 
 -- Actions TARDIS
 local function startup()
-    stopHandle(errorHandle)
-    errorActive = false
-    shutdownPressCount = 0
+    if ambianceRunning then ambianceRunning() end
     playOnce(sounds.startup)
-    stopHandle(ambianceHandle)
-    ambianceHandle = playLoop(sounds.ambiance)
+    ambianceRunning = playLoop(sounds.ambiance)
 end
 
 local function shutdown()
-    stopHandle(flightHandle)
-    stopHandle(ambianceHandle)
-    stopHandle(errorHandle)
+    if ambianceRunning then ambianceRunning() end
+    if flightRunning then flightRunning() end
     playOnce(sounds.shutdown)
-    errorActive = false
-    shutdownPressCount = 0
 end
 
 local function emergencyShutdown()
-    stopHandle(flightHandle)
-    stopHandle(ambianceHandle)
-    stopHandle(errorHandle)
+    if ambianceRunning then ambianceRunning() end
+    if flightRunning then flightRunning() end
     playOnce(sounds.emergency)
-    errorActive = false
-    shutdownPressCount = 0
 end
 
 local function takeoff()
-    stopHandle(ambianceHandle)
-    flightHandle = playLoop(sounds.flight)
+    if ambianceRunning then ambianceRunning() end
+    flightRunning = playLoop(sounds.flight)
 end
 
 local function materialize()
-    stopHandle(flightHandle)
+    if flightRunning then flightRunning() end
     if math.random(2) == 1 then
         playOnce(sounds.landing)
     else
         playOnce(sounds.mater)
     end
-    ambianceHandle = playLoop(sounds.ambiance)
-end
-
-local function triggerError()
-    if errorActive then return end
-    errorActive = true
-    shutdownPressCount = 0
-    errorHandle = playLoop(sounds.cloister)
-    austream(sounds.bip_error, {speaker = speaker, loop = true})
+    ambianceRunning = playLoop(sounds.ambiance)
 end
 
 -- Interface graphique
