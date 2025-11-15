@@ -1,250 +1,214 @@
--- FULLY FIXED + RESPONSIVE KUBEUI TARDIS SOUNDBOARD
--- This version is 100% SAFE on all screen sizes
--- No more arithmetic nil errors
--- All elements scaled correctly and auto‑adjust to resolution
--- Audio system unchanged
+--==============================--
+--      TARDIS SOUNDBOARD      --
+--     Interface sans API UI    --
+--==============================--
 
-------------------------------------------------------------
--- CONFIG ---------------------------------------------------
-------------------------------------------------------------
-local AUDIO_DIR = "dfpwm"
-local GITHUB_RAW_ROOT = "https://github.com/Dartsgame974/CC-TARDIS-Soundbox/raw/refs/heads/main/dfpwm/"
-local FILES = {
-  tardis_flight_loop = "tardis_flight_loop.dfpwm",
-  ambiance = "ambiance.dfpwm",
-  bip = "bip_sound_error_1.dfpwm",
-  short_flight = "short_flight.dfpwm",
-  emergencyshutdown = "emergencyshutdown.dfpwm",
-  landing = "landing.dfpwm",
-  startup = "startup_tardis.dfpwm",
-  close_door = "close_door.dfpwm",
-  door_open = "door_open.dfpwm",
-  denied = "denied_flight.dfpwm",
-  takeoff = "tardistakeoff.dfpwm",
-  shutdown = "shutdowntardis.dfpwm",
-  cloister = "ambiance.dfpwm" -- change if needed
-}
-
-------------------------------------------------------------
--- STATE ----------------------------------------------------
-------------------------------------------------------------
-local state = {
-  running = true,
-  powered = false,
-  inFlight = false,
-  ambianceLoop = false,
-  flightLoop = false,
-  cloisterLoop = false,
-  bipLoop = false,
-}
-
-------------------------------------------------------------
--- DEPENDENCIES --------------------------------------------
-------------------------------------------------------------
-local fs = fs
-local http = http
-local speaker = peripheral.find("speaker")
 local dfpwm = require("cc.audio.dfpwm")
+local speaker = peripheral.find("speaker")
 
 if not speaker then
-  print("Error: No speaker found.")
-  return
+    error("Aucun haut-parleur détecté.")
 end
 
-if not fs.exists(AUDIO_DIR) then fs.makeDir(AUDIO_DIR) end
+--==============================--
+--        AUDIO SYSTEM          --
+--==============================--
 
-------------------------------------------------------------
--- DOWNLOAD MISSING FILES ----------------------------------
-------------------------------------------------------------
-local function ensure_file(name)
-  local path = AUDIO_DIR .. "/" .. name
-  if fs.exists(path) then return true end
-  if not http then return false end
-  print("Downloading " .. name .. " ...")
-  local r = http.get(GITHUB_RAW_ROOT .. name)
-  if not r then return false end
-  local data = r.readAll()
-  r.close()
-  local f = fs.open(path, "wb"); f.write(data); f.close()
-  print("OK")
-end
+local sounds = {
+    startup       = "startup_tardis.dfpwm",
+    ambiance      = "ambiance.dfpwm",
+    takeoff       = "tardistakeoff.dfpwm",
+    flight        = "tardis_flight_loop.dfpwm",
+    landing       = "landing.dfpwm",
+    cloister      = "cloister.dfpwm",
+    bip           = "bip_sound_error_1.dfpwm",
+    denied        = "denied_flight.dfpwm",
+    short         = "short_flight.dfpwm",
+    emergency     = "emergencyshutdown.dfpwm",
+    shutdown      = "shutdowntardis.dfpwm",
+    door_open     = "door_open.dfpwm",
+    close_door    = "close_door.dfpwm"
+}
 
-for _,file in pairs(FILES) do ensure_file(file) end
+local decoded_cache = {}
+local activeLoops = {
+    ambiance = false,
+    flight = false,
+    cloister = false,
+    bip = false
+}
 
-------------------------------------------------------------
--- AUDIO HELPERS -------------------------------------------
-------------------------------------------------------------
-local decodedCache = {}
-local function loadDecoded(name)
-  if decodedCache[name] then return decodedCache[name] end
-  local f = fs.open(AUDIO_DIR.."/"..name,"rb")
-  if not f then return end
-  local raw = f.readAll(); f.close()
-  local decoded = dfpwm.decode(raw)
-  decodedCache[name] = decoded
-  return decoded
-end
-
-local function playOnce(decoded)
-  while not speaker.playAudio(decoded) do os.pullEvent("speaker_audio_empty") end
-  os.pullEvent("speaker_audio_empty")
-end
-
-local function loopPlayer(activeFn, file)
-  while state.running do
-    if activeFn() then
-      local d = loadDecoded(file)
-      if d then
-        while activeFn() do
-          while not speaker.playAudio(d) do os.pullEvent("speaker_audio_empty") end
-          os.pullEvent("speaker_audio_empty")
-        end
-      end
+-- Téléchargement automatique si fichier absent
+local function ensureSound(name)
+    if not fs.exists(name) then
+        shell.run(
+            "wget",
+            "https://github.com/Dartsgame974/CC-TARDIS-Soundbox/raw/refs/heads/main/dfpwm/" .. name,
+            name
+        )
     end
-    sleep(0.05)
-  end
 end
 
-------------------------------------------------------------
--- HIGH LEVEL ACTIONS --------------------------------------
-------------------------------------------------------------
-local function doStartup()
-  playOnce(loadDecoded(FILES.startup))
-  state.ambianceLoop = true
-  state.powered = true
+for _, f in pairs(sounds) do ensureSound(f) end
+
+-- Décodage / buffer
+local function getDecoded(name)
+    if decoded_cache[name] then return decoded_cache[name] end
+
+    local decoder = dfpwm.make_decoder()
+    local handle = fs.open(name, "rb")
+    local raw = handle.readAll()
+    handle.close()
+
+    local decoded = decoder(raw)
+    decoded_cache[name] = decoded
+    return decoded
 end
 
-local function doShutdown()
-  state.ambianceLoop = false
-  state.flightLoop = false
-  state.cloisterLoop = false
-  state.bipLoop = false
-  playOnce(loadDecoded(FILES.shutdown))
-  state.powered = false
+-- Lecture non bloquante
+local function playAudio(decoded)
+    while not speaker.playAudio(decoded) do
+        os.pullEvent("speaker_audio_empty")
+    end
 end
 
-local function doDemat()
-  state.ambianceLoop = false
-  playOnce(loadDecoded(FILES.takeoff))
-  state.flightLoop = true
-  state.inFlight = true
+-- Gestion des loops
+local function loopManager()
+    while true do
+        if activeLoops.ambiance then playAudio(getDecoded(sounds.ambiance)) end
+        if activeLoops.flight then playAudio(getDecoded(sounds.flight)) end
+        if activeLoops.cloister then playAudio(getDecoded(sounds.cloister)) end
+        if activeLoops.bip then playAudio(getDecoded(sounds.bip)) end
+        sleep(0)
+    end
 end
 
-local function doLanding()
-  state.flightLoop = false
-  playOnce(loadDecoded(FILES.landing))
-  state.inFlight = false
-  if state.powered then state.ambianceLoop = true end
-end
+parallel.waitForAny(loopManager, function()
+    --==============================--
+    --        INTERFACE UI         --
+    --==============================--
 
-local function doDeniedFlight()
-  state.ambianceLoop = false
-  playOnce(loadDecoded(FILES.denied))
-  if state.powered then state.ambianceLoop = true end
-end
+    local w, h = term.getSize()
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.orange)
+    term.clear()
 
-local function doShortFlight()
-  playOnce(loadDecoded(FILES.short_flight))
-  if state.powered then state.ambianceLoop = true end
-end
+    local function centerText(y, text)
+        term.setCursorPos(math.floor(w/2 - #text/2), y)
+        term.write(text)
+    end
 
-local function doEmergencyShutdown()
-  playOnce(loadDecoded(FILES.emergencyshutdown))
-end
+    -- Dessin d'un bouton simple
+    local function drawButton(x, y, label)
+        term.setCursorPos(x, y)
+        term.setBackgroundColor(colors.gray)
+        term.setTextColor(colors.black)
+        term.clearLine()
+        term.setCursorPos(x, y)
+        term.write(label)
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.orange)
+    end
 
-------------------------------------------------------------
--- FIXED + RESPONSIVE KUBE UI ------------------------------
-------------------------------------------------------------
-local gui = require("kubeui")
-pcall(gui.setFont, "kube")
+    -- Tableau des boutons
+    local buttons = {}
+    local function addButton(x, y, label, action)
+        table.insert(buttons, {
+            x = x,
+            y = y,
+            label = label,
+            action = action
+        })
+        drawButton(x, y, label)
+    end
 
-local sw, sh = term.getSize()
+    --==============================--
+    --       LOGIQUE DU TARDIS     --
+    --==============================--
 
--- SAFE smart pos/size
-local refW, refH = 51, 19
-local scaleX = sw / refW
-local scaleY = sh / refH
+    local powered = false
 
-local function SPos(x,y) return math.floor(x*scaleX), math.floor(y*scaleY) end
-local function SSize(w,h)
-  return math.max(3, math.floor(w*scaleX)), math.max(1, math.floor(h*scaleY))
-end
+    local function stopAllLoops()
+        for k in pairs(activeLoops) do activeLoops[k] = false end
+    end
 
-local ui = gui.new()
+    local function startup()
+        stopAllLoops()
+        playAudio(getDecoded(sounds.startup))
+        activeLoops.ambiance = true
+    end
 
--- TITLE ----------------------------------------------------
-local title = gui.Label(SPos(2,1), "ARTRON OS - TYPE 40")
-title.textColor = colors.orange
-ui:add(title)
+    local function shutdown()
+        stopAllLoops()
+        playAudio(getDecoded(sounds.shutdown))
+    end
 
--- Main panel (now SAFE size)
-local panel = gui.Panel(SPos(2,3), SSize(47,15))
-ui:add(panel)
+    local function demat()
+        stopAllLoops()
+        playAudio(getDecoded(sounds.takeoff))
+        activeLoops.flight = true
+    end
 
-------------------------------------------------------------
--- BUTTONS (REPOSITIONED TO NEVER BREAK SCREEN) ------------
-------------------------------------------------------------
-local btnPower = gui.Button(SPos(3,4), SSize(20,3), "POWER", function()
-  if not state.powered then doStartup() else doShutdown() end
+    local function land()
+        stopAllLoops()
+        playAudio(getDecoded(sounds.landing))
+        activeLoops.ambiance = true
+    end
+
+    local function denied()
+        stopAllLoops()
+        playAudio(getDecoded(sounds.denied))
+    end
+
+    local function short_flight()
+        stopAllLoops()
+        playAudio(getDecoded(sounds.short))
+        activeLoops.ambiance = true
+    end
+
+    local function toggleCloister()
+        activeLoops.cloister = not activeLoops.cloister
+    end
+
+    local function toggleBip()
+        activeLoops.bip = not activeLoops.bip
+    end
+
+    --==============================--
+    --       BOUTONS UI            --
+    --==============================--
+
+    centerText(1, "ARTRON OS - TYPE 40")
+
+    addButton(2, 3, "POWER", function()
+        powered = not powered
+        if powered then startup()
+        else shutdown() end
+    end)
+
+    addButton(2, 5, "DEMAT", demat)
+    addButton(2, 7, "LANDING", land)
+    addButton(2, 9, "DENIED", denied)
+    addButton(2, 11, "SHORT FLIGHT", short_flight)
+    addButton(2, 13, "CLOISTER", toggleCloister)
+    addButton(2, 15, "BIP", toggleBip)
+    addButton(2, 17, "DOOR OPEN", function()
+        playAudio(getDecoded(sounds.door_open))
+    end)
+    addButton(2, 19, "DOOR CLOSE", function()
+        playAudio(getDecoded(sounds.close_door))
+    end)
+
+    --==============================--
+    --       EVENT LOOP UI         --
+    --==============================--
+
+    while true do
+        local ev, btn, x, y = os.pullEvent("mouse_click")
+        for _, b in ipairs(buttons) do
+            if y == b.y and x >= b.x and x <= b.x + #b.label then
+                b.action()
+            end
+        end
+    end
 end)
-btnPower.bgColor = colors.orange
-btnPower.textColor = colors.black
-ui:add(btnPower)
-
-local btnEmergency = gui.Button(SPos(25,4), SSize(20,3), "EMERG.", function()
-  doEmergencyShutdown()
-end)
-btnEmergency.textColor = colors.orange
-btnEmergency.bgColor = colors.gray
-ui:add(btnEmergency)
-
-local btnDemat = gui.Button(SPos(3,8), SSize(20,3), "DEMAT", function()
-  if state.powered and not state.inFlight then doDemat() end
-end)
-ui:add(btnDemat)
-
-local btnLanding = gui.Button(SPos(25,8), SSize(20,3), "LANDING", function()
-  if state.inFlight then doLanding() end
-end)
-ui:add(btnLanding)
-
-local btnCloister = gui.Button(SPos(3,12), SSize(20,3), "CLOISTER", function()
-  state.cloisterLoop = not state.cloisterLoop
-end)
-ui:add(btnCloister)
-
-local btnBip = gui.Button(SPos(25,12), SSize(20,3), "BIP", function()
-  state.bipLoop = not state.bipLoop
-end)
-ui:add(btnBip)
-
-local btnDenied = gui.Button(SPos(3,15), SSize(20,3), "DENIED", function()
-  doDeniedFlight()
-end)
-ui:add(btnDenied)
-
-local btnShort = gui.Button(SPos(25,15), SSize(20,3), "SHORT FLG.", function()
-  doShortFlight()
-end)
-ui:add(btnShort)
-
-------------------------------------------------------------
--- AUDIO MANAGER -------------------------------------------
-------------------------------------------------------------
-local function audioManager()
-  parallel.waitForAny(
-    function() loopPlayer(function() return state.ambianceLoop end, FILES.ambiance) end,
-    function() loopPlayer(function() return state.flightLoop end, FILES.tardis_flight_loop) end,
-    function() loopPlayer(function() return state.cloisterLoop end, FILES.cloister) end,
-    function() loopPlayer(function() return state.bipLoop end, FILES.bip) end,
-    function() while state.running do sleep(1) end end
-  )
-end
-
-------------------------------------------------------------
--- RUN ------------------------------------------------------
-------------------------------------------------------------
-parallel.waitForAny(function() ui:run() end, audioManager)
-
-state.running = false
-print("TARDIS Soundboard closed.")
