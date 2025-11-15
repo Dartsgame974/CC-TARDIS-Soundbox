@@ -1,8 +1,7 @@
 -- TARDIS Soundbox - Système Audio Complet
--- Basé sur Basalt UI et AUKit
+-- Basé sur Basalt UI et système audio simple
 
 local basalt = require("basalt")
-local aukit = require("aukit")
 
 -- Configuration
 local GITHUB_BASE = "https://raw.githubusercontent.com/Dartsgame974/CC-TARDIS-Soundbox/main/sound/"
@@ -15,98 +14,117 @@ end
 -- Variables d'état globales
 local systemStarted = false
 local isFlying = false
-local ambianceLoop = nil
-local flightLoop = nil
 local errorActive = false
 local errorCount = 0
 local currentError = nil
 
 -- Threads audio actifs
-local audioThreads = {}
+local activeThreads = {}
 
--- Timer pour les erreurs aléatoires (probabilité par heure)
-local errorTimer = os.startTimer(3600) -- 1 heure
-
--- Fonction pour télécharger et jouer un son
-local function playSound(filename, loop, callback)
-    local url = GITHUB_BASE .. filename
+-- Fonction simple pour jouer un son WAV en streaming
+local function playSound(filename, loop)
+    local threadName = filename
     
     -- Arrêter le thread existant si présent
-    if audioThreads[filename] then
-        pcall(function() audioThreads[filename].stop() end)
-        audioThreads[filename] = nil
+    if activeThreads[threadName] then
+        activeThreads[threadName] = false
     end
     
-    -- Thread pour télécharger et jouer le son
-    local thread = coroutine.create(function()
-        local response, err = http.get(url, nil, true)
-        if not response then
-            print("Erreur téléchargement: " .. filename)
-            return
-        end
-        
-        local data = response.readAll()
-        response.close()
-        
-        -- Créer un stream à partir des données
-        local iter, length = aukit.stream.wav(data, false)
-        
-        if loop then
-            -- Boucle infinie
-            while true do
-                local success = pcall(function()
-                    aukit.play(iter, nil, 1.0, speakers)
-                end)
-                if not success then break end
-                
-                -- Recréer l'itérateur pour la boucle
-                iter, length = aukit.stream.wav(data, false)
-            end
-        else
-            -- Jouer une seule fois
-            pcall(function()
-                aukit.play(iter, nil, 1.0, speakers)
-            end)
+    activeThreads[threadName] = true
+    
+    -- Thread pour streaming audio
+    basalt.schedule(function()
+        while activeThreads[threadName] do
+            local url = GITHUB_BASE .. filename
+            local response = http.get(url, nil, true)
             
-            if callback then
-                callback()
+            if not response then
+                print("Erreur téléchargement: " .. filename)
+                activeThreads[threadName] = false
+                break
             end
+            
+            -- Lire l'en-tête WAV pour trouver les données
+            local header = response.read(44) -- En-tête WAV standard
+            if not header or #header < 44 then
+                response.close()
+                activeThreads[threadName] = false
+                break
+            end
+            
+            -- Lire et jouer les données audio chunk par chunk
+            local decoder = dfpwm.make_decoder()
+            local chunkSize = 16 * 1024 -- 16KB chunks
+            
+            while activeThreads[threadName] do
+                local chunk = response.read(chunkSize)
+                if not chunk then
+                    break
+                end
+                
+                -- Convertir en DFPWM (approximation simple)
+                -- Note: Pour un vrai WAV, il faudrait parser le format PCM
+                -- Ici on utilise une méthode simplifiée
+                local pcm = {}
+                for i = 1, #chunk do
+                    pcm[i] = string.byte(chunk, i) - 128
+                end
+                
+                -- Jouer sur tous les speakers
+                for _, speaker in ipairs(speakers) do
+                    -- Conversion simple en buffer audio
+                    local buffer = {}
+                    for i = 1, math.min(#pcm, 128 * 1024) do
+                        buffer[i] = pcm[i]
+                    end
+                    
+                    while not speaker.playAudio(buffer) do
+                        os.pullEvent("speaker_audio_empty")
+                        if not activeThreads[threadName] then
+                            break
+                        end
+                    end
+                end
+                
+                if not activeThreads[threadName] then
+                    break
+                end
+            end
+            
+            response.close()
+            
+            -- Si pas en boucle, arrêter
+            if not loop then
+                activeThreads[threadName] = false
+                break
+            end
+            
+            -- Petite pause avant de reboucler
+            sleep(0.1)
         end
     end)
     
-    audioThreads[filename] = {
-        thread = thread,
+    return {
         stop = function()
-            -- Arrêter tous les haut-parleurs
-            for _, speaker in ipairs(speakers) do
-                speaker.stop()
-            end
+            activeThreads[threadName] = false
         end
     }
-    
-    -- Démarrer le thread
-    local ok, err = coroutine.resume(thread)
-    if not ok then
-        print("Erreur lecture: " .. tostring(err))
-    end
-    
-    return audioThreads[filename]
 end
 
 -- Fonction pour arrêter un son spécifique
 local function stopSound(filename)
-    if audioThreads[filename] then
-        audioThreads[filename].stop()
-        audioThreads[filename] = nil
+    activeThreads[filename] = false
+    
+    for _, speaker in ipairs(speakers) do
+        speaker.stop()
     end
 end
 
 -- Fonction pour arrêter tous les sons
 local function stopAllSounds()
-    for name, thread in pairs(audioThreads) do
-        thread.stop()
+    for name, _ in pairs(activeThreads) do
+        activeThreads[name] = false
     end
-    audioThreads = {}
     
     for _, speaker in ipairs(speakers) do
         speaker.stop()
@@ -122,7 +140,6 @@ local function toggleButtonColors(button)
     button:setForeground(bg)
     
     -- Remettre les couleurs après 0.2s
-    os.startTimer(0.2)
     basalt.schedule(function()
         sleep(0.2)
         button:setBackground(bg)
@@ -133,12 +150,7 @@ end
 -- Create main frame
 local main = basalt.createFrame()
     :setSize(51, 19)
-
--- Frame element
-local mainFrame = main:addFrame()
-    :setPosition(2, 4)
-    :setSize(49, 15)
-    :setForeground(colors.orange)
+    :setBackground(colors.black)
 
 -- Label element - Titre
 local titleLabel = main:addLabel()
@@ -146,305 +158,321 @@ local titleLabel = main:addLabel()
     :setSize(49, 1)
     :setText("ARTRON OS - TYPE 40")
     :setForeground(colors.orange)
+    :setBackground(colors.black)
+
+-- Frame element avec bordure
+local mainFrame = main:addFrame()
+    :setPosition(2, 4)
+    :setSize(49, 15)
+    :setBackground(colors.black)
+    :setForeground(colors.orange)
+    :setBorder(colors.orange)
 
 -- Button START/OFF
-local startButton = main:addButton()
-    :setPosition(3, 5)
+local startButton = mainFrame:addButton()
+    :setPosition(2, 2)
     :setSize(16, 3)
     :setText("START/OFF")
+    :setBackground(colors.black)
     :setForeground(colors.orange)
-    :onClick(function(self)
-        toggleButtonColors(self)
-        
-        if not systemStarted then
-            -- Démarrage
-            systemStarted = true
-            
-            -- Jouer le son de démarrage
-            playSound("startup_tardis.wav", false, function()
-                -- À la fin du démarrage, lancer l'ambiance
-                ambianceLoop = playSound("ambience_tardis.wav", true)
-                
-                -- Activer le signal redstone
-                redstone.setOutput("bottom", true)
-            end)
-            
-            self:setText("SYSTEM ON")
-        else
-            -- Arrêt
-            systemStarted = false
-            
-            -- Arrêter l'ambiance
-            stopSound("ambience_tardis.wav")
-            
-            -- Jouer le son d'arrêt
-            playSound("shutdowntardis.wav", false)
-            
-            -- Désactiver le signal redstone
-            redstone.setOutput("bottom", false)
-            
-            self:setText("START/OFF")
-        end
-    end)
 
 -- Button EMERGENCY
-local emergencyButton = main:addButton()
-    :setPosition(3, 8)
+local emergencyButton = mainFrame:addButton()
+    :setPosition(2, 5)
     :setSize(16, 3)
     :setText("EMERGENCY")
     :setBackground(colors.red)
-    :onClick(function(self)
-        toggleButtonColors(self)
-        
-        -- Arrêt d'urgence (similaire à l'arrêt normal mais avec son différent)
-        systemStarted = false
-        stopAllSounds()
-        
-        playSound("emergencyshutdown.wav", false)
-        redstone.setOutput("bottom", false)
-        
-        startButton:setText("START/OFF")
-        
-        -- Réinitialiser les erreurs
-        errorActive = false
-        errorCount = 0
-    end)
+    :setForeground(colors.white)
+
+-- Button Cloister
+local cloisterButton = mainFrame:addButton()
+    :setPosition(18, 2)
+    :setSize(10, 3)
+    :setText("Cloister")
+    :setBackground(colors.black)
+    :setForeground(colors.orange)
+
+-- Button ERROR BIP
+local errorBipButton = mainFrame:addButton()
+    :setPosition(28, 2)
+    :setSize(11, 3)
+    :setText("ERROR BIP")
+    :setBackground(colors.black)
+    :setForeground(colors.orange)
+
+-- Button DOOR
+local doorButton = mainFrame:addButton()
+    :setPosition(39, 2)
+    :setSize(10, 3)
+    :setText("DOOR")
+    :setBackground(colors.black)
+    :setForeground(colors.orange)
+
+-- Button DENIED TO
+local deniedButton = mainFrame:addButton()
+    :setPosition(18, 5)
+    :setSize(14, 3)
+    :setText("DENIED TO")
+    :setBackground(colors.black)
+    :setForeground(colors.orange)
+
+-- Button CHAOS FLIGHT
+local chaosButton = mainFrame:addButton()
+    :setPosition(31, 5)
+    :setSize(18, 3)
+    :setText("CHAOS FLIGHT")
+    :setBackground(colors.red)
+    :setForeground(colors.white)
+
+-- Labels d'information
+local infoLabel1 = mainFrame:addLabel()
+    :setPosition(2, 9)
+    :setSize(29, 1)
+    :setText("THE SILENCE")
+    :setBackground(colors.black)
+    :setForeground(colors.orange)
+
+local infoLabel2 = mainFrame:addLabel()
+    :setPosition(2, 10)
+    :setSize(33, 1)
+    :setText("ARTRON : 120AeU/photon")
+    :setBackground(colors.black)
+    :setForeground(colors.orange)
+
+-- ProgressBar element (pour effet visuel)
+local progressBar = mainFrame:addProgressBar()
+    :setPosition(36, 9)
+    :setSize(13, 2)
+    :setProgress(50)
+    :setProgressColor(colors.orange)
+    :setBackground(colors.gray)
+
+-- Button DEMAT (Dématérialisation)
+local dematButton = mainFrame:addButton()
+    :setPosition(2, 12)
+    :setSize(8, 3)
+    :setText("DEMAT")
+    :setBackground(colors.black)
+    :setForeground(colors.orange)
 
 -- Button FLIGHT
-local flightButton = main:addButton()
-    :setPosition(11, 15)
+local flightButton = mainFrame:addButton()
+    :setPosition(10, 12)
     :setSize(16, 3)
     :setText("FLIGHT")
     :setBackground(colors.orange)
     :setForeground(colors.black)
-    :onClick(function(self)
-        toggleButtonColors(self)
-        
-        if not systemStarted then
-            return
-        end
-        
-        if not isFlying then
-            -- Démarrer le vol
-            isFlying = true
-            
-            -- Arrêter l'ambiance
-            stopSound("ambience_tardis.wav")
-            
-            -- Jouer le son de décollage puis la boucle de vol
-            playSound("tardistakeoff.wav", false, function()
-                flightLoop = playSound("tardis_flight_loop.wav", true)
-            end)
-            
-            self:setText("IN FLIGHT")
-        end
-    end)
-
--- Button DEMAT (Dématérialisation)
-local dematButton = main:addButton()
-    :setPosition(3, 15)
-    :setText("DEMAT")
-    :setBackground(colors.black)
-    :setForeground(colors.orange)
-    :onClick(function(self)
-        toggleButtonColors(self)
-        
-        if not systemStarted then
-            return
-        end
-        
-        -- Jouer le son de départ
-        playSound("depart_tardis.wav", false)
-    end)
 
 -- Button Landing (Matérialisation)
-local landingButton = main:addButton()
-    :setPosition(27, 15)
+local landingButton = mainFrame:addButton()
+    :setPosition(26, 12)
     :setSize(13, 3)
     :setText("Landing")
     :setBackground(colors.black)
     :setForeground(colors.orange)
-    :onClick(function(self)
-        toggleButtonColors(self)
-        
-        if not isFlying then
-            return
-        end
-        
-        -- Arrêter la boucle de vol
-        stopSound("tardis_flight_loop.wav")
-        
-        -- Choisir aléatoirement entre landing et tardismater
-        local landingSounds = {"landing.wav", "tardismater.wav"}
-        local selectedSound = landingSounds[math.random(1, 2)]
-        
-        playSound(selectedSound, false, function()
-            -- Redémarrer l'ambiance
-            ambianceLoop = playSound("ambience_tardis.wav", true)
-            isFlying = false
-            flightButton:setText("FLIGHT")
-        end)
-    end)
-
--- Button Cloister
-local cloisterButton = main:addButton()
-    :setPosition(19, 5)
-    :setSize(10, 3)
-    :setText("Cloister")
-    :setForeground(colors.orange)
-    :onClick(function(self)
-        toggleButtonColors(self)
-        
-        if not errorActive then
-            errorActive = true
-            currentError = "cloister"
-            errorCount = 0
-            
-            -- Démarrer la boucle cloister
-            playSound("cloister_ding.wav", true)
-            
-            self:setBackground(colors.red)
-        else
-            -- Compter les appuis sur shutdown pour arrêter
-            errorCount = errorCount + 1
-            if errorCount >= 3 then
-                stopSound("cloister_ding.wav")
-                errorActive = false
-                errorCount = 0
-                currentError = nil
-                self:setBackground(colors.black)
-            end
-        end
-    end)
-
--- Button ERROR BIP
-local errorBipButton = main:addButton()
-    :setPosition(29, 5)
-    :setSize(11, 3)
-    :setText("ERROR BIP")
-    :setForeground(colors.orange)
-    :onClick(function(self)
-        toggleButtonColors(self)
-        
-        if not errorActive then
-            errorActive = true
-            currentError = "bip"
-            errorCount = 0
-            
-            -- Démarrer la boucle bip
-            playSound("bip_sound_error_1.wav", true)
-            
-            self:setBackground(colors.red)
-        else
-            -- Compter les appuis pour arrêter
-            errorCount = errorCount + 1
-            if errorCount >= 3 then
-                stopSound("bip_sound_error_1.wav")
-                errorActive = false
-                errorCount = 0
-                currentError = nil
-                self:setBackground(colors.black)
-            end
-        end
-    end)
-
--- Button DOOR
-local doorButton = main:addButton()
-    :setPosition(40, 5)
-    :setSize(10, 3)
-    :setText("DOOR")
-    :setForeground(colors.orange)
-    :onClick(function(self)
-        toggleButtonColors(self)
-        
-        local text = self:getText()
-        if text == "DOOR" or text == "CLOSED" then
-            playSound("door_open.wav", false)
-            self:setText("OPEN")
-        else
-            playSound("close_door.wav", false)
-            self:setText("CLOSED")
-        end
-    end)
-
--- Button DENIED TO
-local deniedButton = main:addButton()
-    :setPosition(19, 8)
-    :setSize(14, 3)
-    :setText("DENIED TO")
-    :onClick(function(self)
-        toggleButtonColors(self)
-        playSound("denied_flight.wav", false)
-    end)
-
--- Button CHAOS FLIGHT
-local chaosButton = main:addButton()
-    :setPosition(32, 8)
-    :setSize(18, 3)
-    :setText("CHAOS FLIGHT")
-    :setBackground(colors.red)
-    :onClick(function(self)
-        toggleButtonColors(self)
-        
-        if systemStarted then
-            -- Vol chaotique court
-            stopSound("ambience_tardis.wav")
-            playSound("short_flight.wav", false, function()
-                ambianceLoop = playSound("ambience_tardis.wav", true)
-            end)
-        end
-    end)
 
 -- Button AMB (Ambiance manuelle)
-local ambButton = main:addButton()
-    :setPosition(40, 15)
+local ambButton = mainFrame:addButton()
+    :setPosition(39, 12)
     :setSize(10, 3)
     :setText("AMB")
     :setBackground(colors.black)
     :setForeground(colors.orange)
-    :onClick(function(self)
-        toggleButtonColors(self)
+
+-- Événements des boutons
+
+startButton:onClick(function(self)
+    toggleButtonColors(self)
+    
+    if errorActive then
+        errorCount = errorCount + 1
         
-        if ambianceLoop then
-            stopSound("ambience_tardis.wav")
-            ambianceLoop = nil
-            self:setText("AMB OFF")
-        else
-            ambianceLoop = playSound("ambience_tardis.wav", true)
-            self:setText("AMB ON")
+        if errorCount >= 3 then
+            -- Arrêter l'erreur
+            stopSound("cloister_ding.wav")
+            stopSound("bip_sound_error_1.wav")
+            cloisterButton:setBackground(colors.black)
+            errorBipButton:setBackground(colors.black)
+            
+            errorActive = false
+            errorCount = 0
+            currentError = nil
         end
+        return
+    end
+    
+    if not systemStarted then
+        -- Démarrage
+        systemStarted = true
+        playSound("startup_tardis.wav", false)
+        
+        basalt.schedule(function()
+            sleep(3) -- Attendre la fin du son de démarrage
+            if systemStarted then
+                playSound("ambience_tardis.wav", true)
+                redstone.setOutput("bottom", true)
+            end
+        end)
+        
+        self:setText("SYSTEM ON")
+    else
+        -- Arrêt
+        systemStarted = false
+        stopSound("ambience_tardis.wav")
+        playSound("shutdowntardis.wav", false)
+        redstone.setOutput("bottom", false)
+        self:setText("START/OFF")
+    end
+end)
+
+emergencyButton:onClick(function(self)
+    toggleButtonColors(self)
+    
+    systemStarted = false
+    stopAllSounds()
+    playSound("emergencyshutdown.wav", false)
+    redstone.setOutput("bottom", false)
+    startButton:setText("START/OFF")
+    
+    errorActive = false
+    errorCount = 0
+end)
+
+flightButton:onClick(function(self)
+    toggleButtonColors(self)
+    
+    if not systemStarted then
+        return
+    end
+    
+    if not isFlying then
+        isFlying = true
+        stopSound("ambience_tardis.wav")
+        playSound("tardistakeoff.wav", false)
+        
+        basalt.schedule(function()
+            sleep(2)
+            if isFlying then
+                playSound("tardis_flight_loop.wav", true)
+            end
+        end)
+        
+        self:setText("IN FLIGHT")
+    end
+end)
+
+dematButton:onClick(function(self)
+    toggleButtonColors(self)
+    
+    if not systemStarted then
+        return
+    end
+    
+    playSound("depart_tardis.wav", false)
+end)
+
+landingButton:onClick(function(self)
+    toggleButtonColors(self)
+    
+    if not isFlying then
+        return
+    end
+    
+    stopSound("tardis_flight_loop.wav")
+    
+    -- Choisir aléatoirement
+    local landingSounds = {"landing.wav", "tardismater.wav"}
+    local selectedSound = landingSounds[math.random(1, 2)]
+    
+    playSound(selectedSound, false)
+    
+    basalt.schedule(function()
+        sleep(2)
+        playSound("ambience_tardis.wav", true)
+        isFlying = false
+        flightButton:setText("FLIGHT")
     end)
+end)
 
--- ProgressBar element (pour effet visuel)
-local progressBar = main:addProgressBar()
-    :setPosition(37, 12)
-    :setSize(13, 2)
-    :setProgressColor(colors.orange)
-    :setProgress(50)
+cloisterButton:onClick(function(self)
+    toggleButtonColors(self)
+    
+    if not errorActive then
+        errorActive = true
+        currentError = "cloister"
+        errorCount = 0
+        playSound("cloister_ding.wav", true)
+        self:setBackground(colors.red)
+    end
+end)
 
--- Labels d'information
-local infoLabel1 = main:addLabel()
-    :setPosition(3, 12)
-    :setSize(29, 1)
-    :setText("THE SILENCE")
+errorBipButton:onClick(function(self)
+    toggleButtonColors(self)
+    
+    if not errorActive then
+        errorActive = true
+        currentError = "bip"
+        errorCount = 0
+        playSound("bip_sound_error_1.wav", true)
+        self:setBackground(colors.red)
+    end
+end)
 
-local infoLabel2 = main:addLabel()
-    :setPosition(3, 13)
-    :setSize(33, 1)
-    :setText("ARTRON : 120AeU/photon")
-    :setForeground(colors.orange)
+doorButton:onClick(function(self)
+    toggleButtonColors(self)
+    
+    local text = self:getText()
+    if text == "DOOR" or text == "CLOSED" then
+        playSound("door_open.wav", false)
+        self:setText("OPEN")
+    else
+        playSound("close_door.wav", false)
+        self:setText("CLOSED")
+    end
+end)
 
--- Gestion des erreurs aléatoires
+deniedButton:onClick(function(self)
+    toggleButtonColors(self)
+    playSound("denied_flight.wav", false)
+end)
+
+chaosButton:onClick(function(self)
+    toggleButtonColors(self)
+    
+    if systemStarted then
+        stopSound("ambience_tardis.wav")
+        playSound("short_flight.wav", false)
+        
+        basalt.schedule(function()
+            sleep(2)
+            if systemStarted then
+                playSound("ambience_tardis.wav", true)
+            end
+        end)
+    end
+end)
+
+ambButton:onClick(function(self)
+    toggleButtonColors(self)
+    
+    if activeThreads["ambience_tardis.wav"] then
+        stopSound("ambience_tardis.wav")
+        self:setText("AMB OFF")
+    else
+        playSound("ambience_tardis.wav", true)
+        self:setText("AMB ON")
+    end
+end)
+
+-- Erreurs aléatoires
 basalt.schedule(function()
     while true do
         sleep(3600) -- Toutes les heures
         
-        -- Probabilité d'erreur (30% de chance)
         if math.random(1, 100) <= 30 and not errorActive and systemStarted then
             errorActive = true
             errorCount = 0
             
-            -- Choisir aléatoirement le type d'erreur
             local errorTypes = {"cloister", "bip"}
             currentError = errorTypes[math.random(1, 2)]
             
@@ -459,48 +487,7 @@ basalt.schedule(function()
     end
 end)
 
--- Gestion spéciale du shutdown pour arrêter les erreurs
-startButton:onClick(function(self)
-    toggleButtonColors(self)
-    
-    if errorActive then
-        errorCount = errorCount + 1
-        
-        if errorCount >= 3 then
-            -- Arrêter l'erreur
-            if currentError == "cloister" then
-                stopSound("cloister_ding.wav")
-                cloisterButton:setBackground(colors.black)
-            elseif currentError == "bip" then
-                stopSound("bip_sound_error_1.wav")
-                errorBipButton:setBackground(colors.black)
-            end
-            
-            errorActive = false
-            errorCount = 0
-            currentError = nil
-        end
-        return
-    end
-    
-    -- Logique normale du bouton startup
-    if not systemStarted then
-        systemStarted = true
-        playSound("startup_tardis.wav", false, function()
-            ambianceLoop = playSound("ambience_tardis.wav", true)
-            redstone.setOutput("bottom", true)
-        end)
-        self:setText("SYSTEM ON")
-    else
-        systemStarted = false
-        stopSound("ambience_tardis.wav")
-        playSound("shutdowntardis.wav", false)
-        redstone.setOutput("bottom", false)
-        self:setText("START/OFF")
-    end
-end)
-
--- Boucle de mise à jour de la barre de progression (effet visuel)
+-- Animation de la barre de progression
 basalt.schedule(function()
     while true do
         sleep(0.1)
