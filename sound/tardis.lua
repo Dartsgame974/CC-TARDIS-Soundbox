@@ -98,20 +98,28 @@ local function create_foreground_source()
   end
 end
 
--- Callback for playing mixed samples to speaker
-local function callback(samples)
-  local buffer = {}
-  for i = 1, #samples do
-    local s = samples[i]
-    buffer[i] = math.floor(s * 127 + 0.5)
+-- Create mixed source
+local function create_mixed_source()
+  local bg = create_background_source()
+  local fg = create_foreground_source()
+  return function()
+    local bg_samples = bg() or {}
+    local fg_samples = fg() or {}
+    local len = math.max(#bg_samples, #fg_samples)
+    if len == 0 then return nil end
+    local mixed = {}
+    for i = 1, len do
+      local b = bg_samples[i] or 0
+      local f = fg_samples[i] or 0
+      mixed[i] = math.min(1, math.max(-1, b + f))  -- Add and clip
+    end
+    return mixed
   end
-  speaker.playAudio(buffer)
-  os.pullEvent("speaker_audio_empty")
 end
 
 -- Playback function
 local function playback()
-  aukit.play(callback, nil, 1.0, create_background_source(), create_foreground_source())
+  aukit.play(create_mixed_source(), nil, 1.0, speaker)
 end
 
 -- Main UI and logic function
