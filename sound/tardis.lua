@@ -1,11 +1,9 @@
 -- Artron OS – Type 40 (TARDIS Soundbox)
 -- Interface graphique orange sur noir avec boutons cliquables
--- Sons streamés depuis GitHub via shell.run("austream", url")
+-- Sons streamés directement depuis GitHub via shell.run("austream", url")
 
 local speaker = peripheral.find("speaker")
-if not speaker then
-    error("Aucun speaker trouvé !")
-end
+if not speaker then error("Aucun speaker trouvé !") end
 
 -- Base URL GitHub (raw)
 local baseURL = "https://raw.githubusercontent.com/Dartsgame974/CC-TARDIS-Soundbox/main/sound/"
@@ -18,22 +16,20 @@ local sounds = {
     ambiance = baseURL.."ambience_tardis.wav",
     flight = baseURL.."tardis_flight_loop.wav",
     landing = baseURL.."landing.wav",
-    mater = baseURL.."tardismater.wav",
-    cloister = baseURL.."cloister_ding.wav",
-    bip_error = baseURL.."bip_sound_error_1.wav",
+    mater = baseURL.."tardismater.wav"
 }
 
--- État des sons
+-- Variables pour gérer les boucles
 local ambianceRunning = false
 local flightRunning = false
+local ambianceStop, flightStop
 
 -- Fonctions de lecture
-local function playOnce(url)
+local function play(url)
     shell.run("austream", url)
 end
 
-local function playLoop(url)
-    -- Boucle simple : on lance austream en parallèle pour simuler le loop
+local function loop(url)
     local running = true
     local co = coroutine.create(function()
         while running do
@@ -42,48 +38,48 @@ local function playLoop(url)
         end
     end)
     coroutine.resume(co)
-    return function() running = false end -- retourne une fonction pour arrêter la boucle
+    return function() running = false end
 end
 
 -- Actions TARDIS
 local function startup()
-    if ambianceRunning then ambianceRunning() end
-    playOnce(sounds.startup)
-    ambianceRunning = playLoop(sounds.ambiance)
+    if ambianceStop then ambianceStop() end
+    play(sounds.startup)
+    ambianceStop = loop(sounds.ambiance)
 end
 
 local function shutdown()
-    if ambianceRunning then ambianceRunning() end
-    if flightRunning then flightRunning() end
-    playOnce(sounds.shutdown)
+    if ambianceStop then ambianceStop() end
+    if flightStop then flightStop() end
+    play(sounds.shutdown)
 end
 
-local function emergencyShutdown()
-    if ambianceRunning then ambianceRunning() end
-    if flightRunning then flightRunning() end
-    playOnce(sounds.emergency)
+local function emergency()
+    if ambianceStop then ambianceStop() end
+    if flightStop then flightStop() end
+    play(sounds.emergency)
 end
 
 local function takeoff()
-    if ambianceRunning then ambianceRunning() end
-    flightRunning = playLoop(sounds.flight)
+    if ambianceStop then ambianceStop() end
+    flightStop = loop(sounds.flight)
 end
 
 local function materialize()
-    if flightRunning then flightRunning() end
+    if flightStop then flightStop() end
     if math.random(2) == 1 then
-        playOnce(sounds.landing)
+        play(sounds.landing)
     else
-        playOnce(sounds.mater)
+        play(sounds.mater)
     end
-    ambianceRunning = playLoop(sounds.ambiance)
+    ambianceStop = loop(sounds.ambiance)
 end
 
 -- Interface graphique
 local buttons = {
     {x=2, y=4, w=20, h=3, text="Startup", action=startup},
     {x=2, y=8, w=20, h=3, text="Shutdown", action=shutdown},
-    {x=2, y=12, w=20, h=3, text="Emergency", action=emergencyShutdown},
+    {x=2, y=12, w=20, h=3, text="Emergency", action=emergency},
     {x=25, y=4, w=20, h=3, text="Takeoff", action=takeoff},
     {x=25, y=8, w=20, h=3, text="Materialize", action=materialize},
 }
@@ -99,17 +95,12 @@ end
 
 local function drawUI()
     term.clear()
-    -- Titre
     local w,h = term.getSize()
     local title = "Artron OS – Type 40"
     term.setTextColor(colors.orange)
     term.setCursorPos(math.floor((w-#title)/2)+1, 1)
     term.write(title)
-
-    -- Boutons
-    for _, btn in ipairs(buttons) do
-        drawButton(btn, false)
-    end
+    for _, btn in ipairs(buttons) do drawButton(btn, false) end
 end
 
 local function handleTouch(x, y)
@@ -124,10 +115,8 @@ local function handleTouch(x, y)
     end
 end
 
--- Main
+-- Lancement
 drawUI()
-
--- Boucle événementielle
 while true do
     local event, side, x, y = os.pullEvent("mouse_click")
     handleTouch(x, y)
