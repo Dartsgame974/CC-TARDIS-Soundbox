@@ -487,7 +487,7 @@ startButton:onClick(function(self)
     if not systemStarted then
         systemStarted = true
         playSound("startup_tardis.wav", false, function()
-            ambianceLoop = playSound("ambience tardis.wav", true)
+            ambianceLoop = playSound("ambience_tardis.wav", true)
             redstone.setOutput("bottom", true)
         end)
         self:setText("SYSTEM ON")
