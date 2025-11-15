@@ -1,6 +1,5 @@
--- ARTRON OS TYPE 40 - TARDIS Soundboard
--- Dependencies: AUKit (downloaded automatically if absent)
--- CC:Tweaked / ComputerCraft Lua
+-- ARTRON OS TYPE 40 - TARDIS Soundboard (corrected clickable buttons)
+-- Dependencies: AUKit
 
 local SOUND_BASE_URL = "https://github.com/Dartsgame974/CC-TARDIS-Soundbox/raw/refs/heads/main/sound/"
 local SOUND_FILES = {
@@ -19,42 +18,30 @@ local SOUND_FILES = {
 }
 
 -- Colors
-local ORANGE = colors.orange
-local BROWN = colors.brown
-local WHITE = colors.white
+local ORANGE, BROWN, WHITE = colors.orange, colors.brown, colors.white
 
 -- Download AUKit if missing
 if not fs.exists("aukit.lua") then
-    print("Downloading AUKit...")
     shell.run("wget https://raw.githubusercontent.com/MCJack123/AUKit/master/aukit.lua")
 end
 local aukit = require("aukit")
 
--- Find speakers
+-- Speakers
 local speakers = {}
 for _, p in ipairs(peripheral.getNames()) do
     if peripheral.getType(p) == "speaker" then
         table.insert(speakers, peripheral.wrap(p))
     end
 end
+if #speakers == 0 then error("No speakers found!") end
 
--- Ensure at least one speaker
-if #speakers == 0 then
-    error("No speakers found!")
-end
-
--- Audio management
-local currentLoop = nil
-local loopThread = nil
-local savedLoop = nil
+-- Audio functions
+local currentLoop, loopThread, savedLoop = nil, nil, nil
 
 local function playSound(file)
     local url = SOUND_BASE_URL .. file
     local ok, res = pcall(http.get, url, nil, true)
-    if not ok or not res then
-        print("Failed to stream: "..file)
-        return
-    end
+    if not ok or not res then print("Failed: "..file) return end
     local audio = aukit.stream.wav(function() return res.read(48000) end)
     for chunk in audio do
         for _, sp in ipairs(speakers) do
@@ -67,15 +54,10 @@ local function playSound(file)
 end
 
 local function startLoop(name)
-    -- Stop previous loop
-    if loopThread then
-        parallel.waitForAny(function() end) -- Let previous thread die
-    end
+    if loopThread then loopThread = nil end
     currentLoop = name
     loopThread = coroutine.create(function()
-        while true do
-            playSound(SOUND_FILES[name])
-        end
+        while true do playSound(SOUND_FILES[name]) end
     end)
     coroutine.resume(loopThread)
 end
@@ -85,8 +67,9 @@ local function stopLoop()
     currentLoop = nil
 end
 
--- TARDIS Logic
+-- TARDIS logic
 local tardisState = {powered=false, activeLoop=nil}
+local cloisterActive, bipActive = false, false
 
 local function powerOn()
     tardisState.powered = true
@@ -130,7 +113,6 @@ local function shortFlight()
     if savedLoop then startLoop(savedLoop) end
 end
 
-local cloisterActive = false
 local function toggleCloister()
     if cloisterActive then
         cloisterActive = false
@@ -143,7 +125,6 @@ local function toggleCloister()
     end
 end
 
-local bipActive = false
 local function toggleBip()
     if bipActive then
         bipActive = false
@@ -170,23 +151,34 @@ local function closeDoor()
     if savedLoop then startLoop(savedLoop) end
 end
 
--- Interface
+-- Buttons with proper coords
 local buttons = {
-    {label="POWER ON", action=powerOn, x=2, y=3},
-    {label="POWER OFF", action=powerOff, x=18, y=3},
-    {label="TAKEOFF", action=takeOff, x=2, y=5},
-    {label="LANDING", action=landing, x=18, y=5},
-    {label="SHORT FLIGHT", action=shortFlight, x=2, y=7},
-    {label="DENIED", action=denied, x=18, y=7},
-    {label="CLOISTER", action=toggleCloister, x=2, y=9},
-    {label="ERROR BIP", action=toggleBip, x=18, y=9},
-    {label="OPEN DOOR", action=openDoor, x=2, y=11},
-    {label="CLOSE DOOR", action=closeDoor, x=18, y=11},
+    {label="POWER ON", action=powerOn},
+    {label="POWER OFF", action=powerOff},
+    {label="TAKEOFF", action=takeOff},
+    {label="LANDING", action=landing},
+    {label="SHORT FLIGHT", action=shortFlight},
+    {label="DENIED", action=denied},
+    {label="CLOISTER", action=toggleCloister},
+    {label="ERROR BIP", action=toggleBip},
+    {label="OPEN DOOR", action=openDoor},
+    {label="CLOSE DOOR", action=closeDoor},
 }
+
+-- Layout buttons in two columns below status (starting line 6)
+local function layoutButtons()
+    local startX1, startX2, startY = 2, 25, 6
+    for i,b in ipairs(buttons) do
+        b.x = (i%2==1) and startX1 or startX2
+        b.y = startY + math.floor((i-1)/2)
+        b.width = #b.label + 2
+    end
+end
+layoutButtons()
 
 local function drawButton(b)
     term.setCursorPos(b.x, b.y)
-    term.setBackgroundColor(b.active and ORANGE or BROWN)
+    term.setBackgroundColor(ORANGE)
     term.setTextColor(WHITE)
     term.write(" "..b.label.." ")
     term.setBackgroundColor(colors.black)
@@ -200,30 +192,19 @@ local function redraw()
     print("TARDIS Status: "..(tardisState.powered and "ACTIVE" or "INACTIVE"))
     print("Active Loop: "..(tardisState.activeLoop or "None"))
     print("Speakers: "..#speakers)
-    for _, b in ipairs(buttons) do
-        drawButton(b)
-    end
+    for _,b in ipairs(buttons) do drawButton(b) end
 end
 
--- Mouse click handler
 local function handleClick(x,y)
     for _, b in ipairs(buttons) do
-        local bx, by = b.x, b.y
-        local bw = #b.label + 2
-        if x >= bx and x <= bx+bw and y == by then
+        if x >= b.x and x <= (b.x+b.width-1) and y == b.y then
             b.action()
             redraw()
         end
     end
 end
 
--- Main
 redraw()
 while true do
-    local event, p1, p2 = os.pullEvent()
+    local event, button, x, y = os.pullEvent()
     if event == "mouse_click" then
-        handleClick(p2,p3)
-    elseif event == "term_resize" then
-        redraw()
-    end
-end
