@@ -1,10 +1,11 @@
--- Artron OS – Type 40 TARDIS (revamped)
--- Sons streamés via shell.run("austream", url")
--- Interface orange/noir avec logique sonore réaliste
+-- Artron OS – Type 40 TARDIS Soundbox
+-- Interface refaite avec logique sonore complète
+-- Sons streamés via shell.run("austream", url)
 
 local speaker = peripheral.find("speaker")
 if not speaker then error("No speaker found!") end
 
+-- Base GitHub
 local baseURL = "https://raw.githubusercontent.com/Dartsgame974/CC-TARDIS-Soundbox/main/sound/"
 
 -- Sons
@@ -36,7 +37,7 @@ local function play(url)
     shell.run("austream", url)
 end
 
--- Boucle son en parallèle
+-- Boucle en parallèle
 local function loop(url)
     local running = true
     local co = coroutine.create(function()
@@ -46,7 +47,7 @@ local function loop(url)
         end
     end)
     coroutine.resume(co)
-    return function() running=false end
+    return function() running = false end
 end
 
 -- TARDIS Logic
@@ -60,7 +61,8 @@ local function startup()
     if ambianceStop then ambianceStop() end
     if flightStop then flightStop() end
     play(sounds.startup)
-    os.sleep(3) -- approximation du temps startup
+    -- Enchaîner automatiquement ambiance
+    parallel.waitForAny(function() os.sleep(4) end) -- approximatif durée startup
     startAmbiance()
 end
 
@@ -83,22 +85,19 @@ end
 local function takeoff()
     if ambianceStop then ambianceStop() end
     play(sounds.takeoff)
-    os.sleep(2) -- approximatif du son takeoff
+    os.sleep(3) -- approximatif du son takeoff
     if flightStop then flightStop() end
     flightStop = loop(sounds.flight_loop)
     state.inFlight = true
 end
 
 local function materialize()
-    if flightStop then
-        flightStop()
-        flightStop = nil
-    end
+    if flightStop then flightStop() end
     state.inFlight = false
     local choice = math.random(2)
     if choice == 1 then play(sounds.landing)
     else play(sounds.mater) end
-    os.sleep(3) -- approximation durée mater/landing
+    os.sleep(3) -- durée mater/landing
     startAmbiance()
 end
 
@@ -108,21 +107,28 @@ local function cloisterDing() loop(sounds.cloister) end
 local function bipsound() loop(sounds.bipsound) end
 local function deniedFlight() play(sounds.denied) end
 
--- Interface graphique améliorée
-local buttons = {
-    {x=2, y=4, w=20, h=3, text="Startup", action=startup},
-    {x=2, y=8, w=20, h=3, text="Shutdown", action=shutdown},
-    {x=2, y=12, w=20, h=3, text="Emergency", action=emergency},
-    {x=25, y=4, w=20, h=3, text="Takeoff", action=takeoff},
-    {x=25, y=8, w=20, h=3, text="Materialize", action=materialize},
-    {x=2, y=16, w=20, h=3, text="Door Open", action=doorOpen},
-    {x=25, y=12, w=20, h=3, text="Door Close", action=doorClose},
-    {x=2, y=20, w=20, h=3, text="Cloister Ding", action=cloisterDing},
-    {x=25, y=16, w=20, h=3, text="Bip Sound", action=bipsound},
-    {x=25, y=20, w=20, h=3, text="Denied Flight", action=deniedFlight}
+-- Interface complète
+local sections = {
+    {title="Main", buttons={
+        {x=2,y=4,w=20,h=3,text="Startup",action=startup},
+        {x=2,y=8,w=20,h=3,text="Shutdown",action=shutdown},
+        {x=2,y=12,w=20,h=3,text="Emergency",action=emergency}
+    }},
+    {title="Flight", buttons={
+        {x=25,y=4,w=20,h=3,text="Takeoff",action=takeoff},
+        {x=25,y=8,w=20,h=3,text="Materialize",action=materialize}
+    }},
+    {title="Doors", buttons={
+        {x=2,y=16,w=20,h=3,text="Door Open",action=doorOpen},
+        {x=25,y=12,w=20,h=3,text="Door Close",action=doorClose}
+    }},
+    {title="Errors", buttons={
+        {x=2,y=20,w=20,h=3,text="Cloister Ding",action=cloisterDing},
+        {x=25,y=16,w=20,h=3,text="Bip Sound",action=bipsound},
+        {x=25,y=20,w=20,h=3,text="Denied Flight",action=deniedFlight}
+    }}
 }
 
--- Dessiner boutons
 local function drawButton(btn, pressed)
     local bg, fg = colors.black, colors.orange
     if pressed then bg, fg = colors.orange, colors.black end
@@ -132,36 +138,37 @@ local function drawButton(btn, pressed)
     term.write(btn.text)
 end
 
--- Dessiner UI
 local function drawUI()
     term.clear()
     local w,h = term.getSize()
     local title = "Artron OS – Type 40"
     term.setTextColor(colors.orange)
-    term.setCursorPos(math.floor((w-#title)/2)+1, 1)
+    term.setCursorPos(math.floor((w-#title)/2)+1,1)
     term.write(title)
-
-    -- Dessiner boutons
-    for _, btn in ipairs(buttons) do drawButton(btn,false) end
-
-    -- Forcer la barre de lecture tout en bas
-    paintutils.drawFilledBox(1, h, w, h, colors.black)
+    for _, section in ipairs(sections) do
+        for _, btn in ipairs(section.buttons) do
+            drawButton(btn,false)
+        end
+    end
+    -- Barre de lecture forcée en bas
+    paintutils.drawFilledBox(1,h,w,h,colors.black)
 end
 
--- Gestion touch
-local function handleTouch(x, y)
-    for _, btn in ipairs(buttons) do
-        if x>=btn.x and x<=btn.x+btn.w-1 and y>=btn.y and y<=btn.y+btn.h-1 then
-            drawButton(btn,true)
-            btn.action()
-            os.sleep(0.1)
-            drawButton(btn,false)
-            break
+local function handleTouch(x,y)
+    for _, section in ipairs(sections) do
+        for _, btn in ipairs(section.buttons) do
+            if x>=btn.x and x<=btn.x+btn.w-1 and y>=btn.y and y<=btn.y+btn.h-1 then
+                drawButton(btn,true)
+                btn.action()
+                os.sleep(0.1)
+                drawButton(btn,false)
+                break
+            end
         end
     end
 end
 
--- Lancer interface
+-- Lancement
 drawUI()
 while true do
     local event, side, x, y = os.pullEvent("mouse_click")
