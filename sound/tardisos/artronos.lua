@@ -1,250 +1,259 @@
 -- TARDIS Soundboard for ComputerCraft/CC:Tweaked
--- Streams audio using AUKit, terminal interface in orange theme
+-- Uses AUKit for streaming audio from GitHub
+-- Interface in terminal with mouse support
+-- Theme: Orange-based
+
+local base_url = "https://github.com/Dartsgame974/CC-TARDIS-Soundbox/raw/refs/heads/main/sound/"
 
 -- Download AUKit if not present
 if not fs.exists("aukit.lua") then
     shell.run("wget https://raw.githubusercontent.com/MCJack123/AUKit/master/aukit.lua")
 end
 
-local aukit = require "aukit"
+local aukit = require("aukit")
 
--- Base URL for sounds
-local base_url = "https://github.com/Dartsgame974/CC-TARDIS-Soundbox/raw/refs/heads/main/sound/"
+-- Find all speakers
+local speakers = {}
+for _, name in ipairs(peripheral.getNames()) do
+    if peripheral.getType(name) == "speaker" then
+        table.insert(speakers, peripheral.wrap(name))
+    end
+end
 
--- Sound filenames
-local sound_files = {
-    startup = "startup_tardis",
-    ambiance = "ambiance",
-    flight = "tardis_flight_loop",
-    bip = "bip_sound_error_1",
-    cloister = "cloister",
-    takeoff = "tardistakeoff",
-    landing = "landing",
-    short_flight = "short_flight",
-    denied = "denied_flight",
-    shutdown = "shutdowntardis",
-    open_door = "door_open",
-    close_door = "close_door"
+if #speakers == 0 then
+    error("No speakers connected!")
+end
+
+-- Loop display names
+local loop_names = {
+    ambiance = "AMBIANCE",
+    tardis_flight_loop = "FLIGHT",
+    cloister = "CLOISTER",
+    bip_sound_error_1 = "BIP"
 }
 
--- Global states
+-- Global state
 local powered = false
 local current_loop = nil
-local speakers = {peripheral.find("speaker")}
-if #speakers == 0 then
-    print("No speaker found!")
-    return
-end
+local pending_actions = {}
 
--- Function to get URL for a sound
-local function get_url(name)
-    return base_url .. sound_files[name] .. ".wav"
-end
-
--- Interruptible stream play function
-local function play_stream(url)
-    local response = http.get(url, nil, true)
-    if not response then
-        return false
+-- Function to play a stream
+local function play_stream(sound)
+    local url = base_url .. sound .. ".wav"
+    local resp = http.get(url, nil, true)
+    if not resp then
+        print("Failed to stream " .. url)
+        return
     end
-    local audio = aukit.stream.wav(function()
-        return response.read(48000)
-    end)
-    for chunk in audio do
-        for _, speaker in ipairs(speakers) do
-            local played = false
-            while not played do
-                played = speaker.playAudio(chunk)
-                if not played then
-                    local ev = os.pullEvent()
-                    if ev == "_stop_audio" then
-                        response.close()
-                        return false
-                    elseif ev == "speaker_audio_empty" then
-                        -- Continue to retry playAudio
-                    end
-                end
-            end
-        end
+    local reader = function()
+        local data = resp.read(48000)
+        if data == "" then data = nil end
+        return data
     end
-    response.close()
-    return true
-end
-
--- Stop current audio
-local function stop_current()
-    if current_loop then
-        current_loop = nil
-        os.queueEvent("_stop_audio")
-        os.queueEvent("_redraw")
-    end
-end
-
--- Play a single sound
-local function play_single(sound, callback)
-    stop_current()
-    local completed = play_stream(get_url(sound))
-    if completed and callback then
-        callback()
-    end
-end
-
--- Start a loop
-local function start_loop(loop_name)
-    stop_current()
-    current_loop = loop_name
-    os.queueEvent("_redraw")
-    while current_loop == loop_name do
-        local completed = play_stream(get_url(loop_name))
-        if not completed then
-            break
-        end
-    end
+    local stream = aukit.stream.wav(reader)
+    aukit.play(stream, table.unpack(speakers))
+    resp.close()
 end
 
 -- Audio loop
-local function audio_manager()
+local function audio_loop()
     while true do
-        local ev, p1, p2 = os.pullEvent()
-        if ev == "_play_single" then
-            play_single(p1, p2)
-        elseif ev == "_start_loop" then
-            start_loop(p1)
-        elseif ev == "_stop" then
-            stop_current()
+        while #pending_actions > 0 do
+            local action = table.remove(pending_actions, 1)
+            if action.type == "play" then
+                play_stream(action.sound)
+            elseif action.type == "set_loop" then
+                current_loop = action.loop
+            end
+        end
+        if current_loop then
+            play_stream(current_loop)
+        else
+            os.pullEvent("audio_action")
         end
     end
 end
 
--- Draw interface
-local function draw_interface()
-    local w, h = term.getSize()
-    term.setBackgroundColor(colors.black)
-    term.clear()
-    
-    -- Title
-    term.setTextColor(colors.orange)
-    term.setCursorPos(math.floor((w - #("ARTRON OS TYPE 40")) / 2) + 1, 1)
-    term.write("ARTRON OS TYPE 40")
-    
-    -- Status
-    term.setCursorPos(1, 3)
-    term.write("TARDIS Status: " .. (powered and "ACTIVE" or "INACTIVE"))
-    term.setCursorPos(1, 4)
-    term.write("Speakers Connected: " .. #speakers)
-    term.setCursorPos(1, 5)
-    term.write("Active Loop: " .. (current_loop and current_loop:upper() or "None"))
-    
-    -- Buttons
-    local buttons = {
-        {label = "POWER ON", x = 2, y = 7, w = 12, is_active = function() return not powered end, action = function()
-            os.queueEvent("_play_single", "startup", function()
-                powered = true
-                os.queueEvent("_start_loop", "ambiance")
-                os.queueEvent("_redraw")
-            end)
-        end},
-        {label = "POWER OFF", x = 20, y = 7, w = 12, is_active = function() return powered end, action = function()
-            os.queueEvent("_play_single", "shutdown", function()
-                powered = false
-                os.queueEvent("_redraw")
-            end)
-        end},
-        {label = "TAKEOFF", x = 2, y = 9, w = 12, is_active = function() return powered end, action = function()
-            os.queueEvent("_play_single", "takeoff", function()
-                os.queueEvent("_start_loop", "flight")
-                os.queueEvent("_redraw")
-            end)
-        end},
-        {label = "LANDING", x = 20, y = 9, w = 12, is_active = function() return powered end, action = function()
-            os.queueEvent("_play_single", "landing", function()
-                os.queueEvent("_start_loop", "ambiance")
-                os.queueEvent("_redraw")
-            end)
-        end},
-        {label = "SHORT FLIGHT", x = 2, y = 11, w = 14, is_active = function() return powered end, action = function()
-            local save = current_loop
-            os.queueEvent("_play_single", "short_flight", function()
-                if save then
-                    os.queueEvent("_start_loop", save)
-                end
-                os.queueEvent("_redraw")
-            end)
-        end},
-        {label = "DENIED", x = 20, y = 11, w = 12, is_active = function() return powered end, action = function()
-            local save = current_loop
-            os.queueEvent("_play_single", "denied", function()
-                if save then
-                    os.queueEvent("_start_loop", save)
-                end
-                os.queueEvent("_redraw")
-            end)
-        end},
-        {label = "CLOISTER", x = 2, y = 13, w = 12, is_active = function() return powered end, action = function()
-            if current_loop == "cloister" then
-                os.queueEvent("_start_loop", "ambiance")
-            else
-                os.queueEvent("_start_loop", "cloister")
-            end
-        end},
-        {label = "ERROR BIP", x = 20, y = 13, w = 12, is_active = function() return powered end, action = function()
-            if current_loop == "bip" then
-                os.queueEvent("_start_loop", "ambiance")
-            else
-                os.queueEvent("_start_loop", "bip")
-            end
-        end},
-        {label = "OPEN DOOR", x = 2, y = 15, w = 12, is_active = function() return powered end, action = function()
-            local save = current_loop
-            os.queueEvent("_play_single", "open_door", function()
-                if save then
-                    os.queueEvent("_start_loop", save)
-                end
-                os.queueEvent("_redraw")
-            end)
-        end},
-        {label = "CLOSE DOOR", x = 20, y = 15, w = 12, is_active = function() return powered end, action = function()
-            local save = current_loop
-            os.queueEvent("_play_single", "close_door", function()
-                if save then
-                    os.queueEvent("_start_loop", save)
-                end
-                os.queueEvent("_redraw")
-            end)
-        end}
-    }
-    
-    -- Draw buttons and record bounds
-    for _, b in ipairs(buttons) do
-        term.setCursorPos(b.x, b.y)
-        if b.is_active() then
-            term.setBackgroundColor(colors.orange)
-            term.setTextColor(colors.white)
-        else
-            term.setBackgroundColor(colors.brown)
-            term.setTextColor(colors.orange)
-        end
-        local text = "[" .. b.label .. "]"
-        term.write(text)
-        b.left = b.x
-        b.right = b.x + #text - 1
+-- Play temporary sound (interrupt loop if active)
+local function play_temp(sound)
+    if not powered then return end
+    local saved = current_loop
+    if saved then
+        table.insert(pending_actions, {type = "set_loop", loop = nil})
+        table.insert(pending_actions, {type = "play", sound = sound})
+        table.insert(pending_actions, {type = "set_loop", loop = saved})
+    else
+        table.insert(pending_actions, {type = "play", sound = sound})
     end
-    
-    return buttons
+    os.queueEvent("audio_action")
+end
+
+-- Logic functions
+local function power_on()
+    if powered then return end
+    powered = true
+    table.insert(pending_actions, {type = "play", sound = "startup_tardis"})
+    table.insert(pending_actions, {type = "set_loop", loop = "ambiance"})
+    os.queueEvent("audio_action")
+end
+
+local function power_off()
+    if not powered then return end
+    powered = false
+    table.insert(pending_actions, {type = "set_loop", loop = nil})
+    table.insert(pending_actions, {type = "play", sound = "shutdowntardis"})
+    os.queueEvent("audio_action")
+end
+
+local function takeoff()
+    if not powered then return end
+    table.insert(pending_actions, {type = "set_loop", loop = nil})
+    table.insert(pending_actions, {type = "play", sound = "tardistakeoff"})
+    table.insert(pending_actions, {type = "set_loop", loop = "tardis_flight_loop"})
+    os.queueEvent("audio_action")
+end
+
+local function landing()
+    if not powered then return end
+    table.insert(pending_actions, {type = "set_loop", loop = nil})
+    table.insert(pending_actions, {type = "play", sound = "landing"})
+    table.insert(pending_actions, {type = "set_loop", loop = "ambiance"})
+    os.queueEvent("audio_action")
+end
+
+local function short_flight_func()
+    play_temp("short_flight")
+end
+
+local function denied()
+    play_temp("denied_flight")
+end
+
+local function cloister_toggle()
+    if not powered then return end
+    if current_loop == "cloister" then
+        current_loop = "ambiance"
+    else
+        current_loop = "cloister"
+    end
+    os.queueEvent("audio_action")
+end
+
+local function bip_toggle()
+    if not powered then return end
+    if current_loop == "bip_sound_error_1" then
+        current_loop = "ambiance"
+    else
+        current_loop = "bip_sound_error_1"
+    end
+    os.queueEvent("audio_action")
+end
+
+local function door_open()
+    play_temp("door_open")
+end
+
+local function door_close()
+    play_temp("close_door")
 end
 
 -- Interface loop
-local function interface_manager()
-    local buttons = draw_interface()
+local function interface_loop()
+    local button_defs = {
+        {text = "POWER ON", action = power_on, is_active = function() return not powered end, can_click = function() return not powered end},
+        {text = "POWER OFF", action = power_off, is_active = function() return powered end, can_click = function() return powered end},
+        {text = "TAKEOFF", action = takeoff, is_active = function() return powered end, can_click = function() return powered end},
+        {text = "LANDING", action = landing, is_active = function() return powered end, can_click = function() return powered end},
+        {text = "SHORT FLIGHT", action = short_flight_func, is_active = function() return powered end, can_click = function() return powered end},
+        {text = "DENIED", action = denied, is_active = function() return powered end, can_click = function() return powered end},
+        {text = "CLOISTER", action = cloister_toggle, is_active = function() return powered and current_loop == "cloister" end, can_click = function() return powered end},
+        {text = "ERROR BIP", action = bip_toggle, is_active = function() return powered and current_loop == "bip_sound_error_1" end, can_click = function() return powered end},
+        {text = "OPEN DOOR", action = door_open, is_active = function() return powered end, can_click = function() return powered end},
+        {text = "CLOSE DOOR", action = door_close, is_active = function() return powered end, can_click = function() return powered end},
+    }
+
+    local function redraw()
+        term.setBackgroundColor(colors.black)
+        term.clear()
+        local w, h = term.getSize()
+        -- Title
+        local title = "ARTRON OS TYPE 40"
+        term.setCursorPos(math.floor((w - #title) / 2) + 1, 1)
+        term.setTextColor(colors.orange)
+        term.write(title)
+        -- Status
+        term.setCursorPos(2, 3)
+        term.write("TARDIS Status: " .. (powered and "ACTIVE" or "INACTIVE"))
+        term.setCursorPos(2, 4)
+        term.write("Speakers Connected: " .. #speakers)
+        term.setCursorPos(2, 5)
+        term.write("Active Loop: " .. (loop_names[current_loop] or "None"))
+        -- Calculate max left width
+        local max_left_w = 0
+        for i = 1, 5 do
+            local left = button_defs[2 * i - 1]
+            max_left_w = math.max(max_left_w, #left.text + 2)
+        end
+        local left_x = 2
+        local right_x = left_x + max_left_w + 2
+        local start_y = 7
+        for i = 1, 5 do
+            local y = start_y + i - 1
+            -- Left button
+            local left = button_defs[2 * i - 1]
+            term.setCursorPos(left_x, y)
+            if left.is_active() then
+                term.setBackgroundColor(colors.orange)
+                term.setTextColor(colors.white)
+            else
+                term.setBackgroundColor(colors.brown)
+                term.setTextColor(colors.orange)
+            end
+            local btn_text = "[" .. left.text .. "]"
+            term.write(btn_text)
+            left.curr_x = left_x
+            left.curr_y = y
+            left.curr_w = #btn_text
+            left.curr_h = 1
+            -- Right button
+            local right = button_defs[2 * i]
+            term.setCursorPos(right_x, y)
+            if right.is_active() then
+                term.setBackgroundColor(colors.orange)
+                term.setTextColor(colors.white)
+            else
+                term.setBackgroundColor(colors.brown)
+                term.setTextColor(colors.orange)
+            end
+            btn_text = "[" .. right.text .. "]"
+            term.write(btn_text)
+            right.curr_x = right_x
+            right.curr_y = y
+            right.curr_w = #btn_text
+            right.curr_h = 1
+        end
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.white)
+    end
+
     while true do
-        local ev, p1, p2, p3 = os.pullEvent()
-        if ev == "term_resize" or ev == "_redraw" then
-            buttons = draw_interface()
-        elseif ev == "mouse_click" then
-            local button_side, mx, my = p1, p2, p3
-            for _, b in ipairs(buttons) do
-                if my == b.y and mx >= b.left and mx <= b.right and b.is_active() then
-                    b.action()
+        redraw()
+        while true do
+            local event, btn, x, y = os.pullEvent()
+            if event == "term_resize" then
+                break
+            elseif event == "mouse_click" then
+                local clicked = false
+                for _, b in ipairs(button_defs) do
+                    if x >= b.curr_x and x < b.curr_x + b.curr_w and y >= b.curr_y and y < b.curr_y + b.curr_h then
+                        if b.can_click() then
+                            b.action()
+                            clicked = true
+                        end
+                        break
+                    end
+                end
+                if clicked then
                     break
                 end
             end
@@ -253,4 +262,4 @@ local function interface_manager()
 end
 
 -- Run in parallel
-parallel.waitForAny(audio_manager, interface_manager)
+parallel.waitForAll(audio_loop, interface_loop)
