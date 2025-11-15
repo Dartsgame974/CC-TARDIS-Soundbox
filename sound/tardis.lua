@@ -1,11 +1,10 @@
--- Artron OS – Type 40 (TARDIS Soundbox)
--- Interface graphique orange sur noir avec tous les boutons
--- Sons streamés directement depuis GitHub via shell.run("austream", url)
+-- Artron OS – Type 40 TARDIS (revamped)
+-- Sons streamés via shell.run("austream", url")
+-- Interface orange/noir avec logique sonore réaliste
 
 local speaker = peripheral.find("speaker")
 if not speaker then error("No speaker found!") end
 
--- Base URL GitHub (raw)
 local baseURL = "https://raw.githubusercontent.com/Dartsgame974/CC-TARDIS-Soundbox/main/sound/"
 
 -- Sons
@@ -13,8 +12,9 @@ local sounds = {
     startup = baseURL.."startup_tardis.wav",
     shutdown = baseURL.."shutdowntardis.wav",
     emergency = baseURL.."emergencyshutdown.wav",
-    ambiance = baseURL.."ambience_tardis.wav",
-    flight = baseURL.."tardis_flight_loop.wav",
+    ambiance = baseURL.."ambience%20tardis.wav",
+    takeoff = baseURL.."tardistakeoff.wav",
+    flight_loop = baseURL.."tardis_flight_loop.wav",
     landing = baseURL.."landing.wav",
     mater = baseURL.."tardismater.wav",
     door_open = baseURL.."door_open.wav",
@@ -24,14 +24,19 @@ local sounds = {
     denied = baseURL.."denied_flight.wav"
 }
 
--- Variables pour boucles
+-- État des sons
 local ambianceStop, flightStop, errorStop
+local state = {
+    inFlight = false,
+    ambiancePlaying = false
+}
 
--- Fonctions de lecture
+-- Jouer un son simple
 local function play(url)
     shell.run("austream", url)
 end
 
+-- Boucle son en parallèle
 local function loop(url)
     local running = true
     local co = coroutine.create(function()
@@ -41,56 +46,69 @@ local function loop(url)
         end
     end)
     coroutine.resume(co)
-    return function() running = false end
+    return function() running=false end
 end
 
--- TARDIS Actions
+-- TARDIS Logic
+local function startAmbiance()
+    if ambianceStop then ambianceStop() end
+    ambianceStop = loop(sounds.ambiance)
+    state.ambiancePlaying = true
+end
+
 local function startup()
     if ambianceStop then ambianceStop() end
     if flightStop then flightStop() end
-    if errorStop then errorStop() end
     play(sounds.startup)
-    -- Wait for startup duration, then launch ambiance
-    parallel.waitForAny(function() os.sleep(3) end) -- approx duration
-    ambianceStop = loop(sounds.ambiance)
+    os.sleep(3) -- approximation du temps startup
+    startAmbiance()
 end
 
 local function shutdown()
     if ambianceStop then ambianceStop() end
     if flightStop then flightStop() end
-    if errorStop then errorStop() end
+    state.inFlight = false
+    state.ambiancePlaying = false
     play(sounds.shutdown)
 end
 
 local function emergency()
     if ambianceStop then ambianceStop() end
     if flightStop then flightStop() end
-    if errorStop then errorStop() end
+    state.inFlight = false
+    state.ambiancePlaying = false
     play(sounds.emergency)
 end
 
 local function takeoff()
     if ambianceStop then ambianceStop() end
-    flightStop = loop(sounds.flight)
+    play(sounds.takeoff)
+    os.sleep(2) -- approximatif du son takeoff
+    if flightStop then flightStop() end
+    flightStop = loop(sounds.flight_loop)
+    state.inFlight = true
 end
 
 local function materialize()
-    if flightStop then flightStop() end
-    if math.random(2) == 1 then
-        play(sounds.landing)
-    else
-        play(sounds.mater)
+    if flightStop then
+        flightStop()
+        flightStop = nil
     end
-    ambianceStop = loop(sounds.ambiance)
+    state.inFlight = false
+    local choice = math.random(2)
+    if choice == 1 then play(sounds.landing)
+    else play(sounds.mater) end
+    os.sleep(3) -- approximation durée mater/landing
+    startAmbiance()
 end
 
 local function doorOpen() play(sounds.door_open) end
 local function doorClose() play(sounds.door_close) end
-local function cloisterDing() play(sounds.cloister) end
-local function bipsound() play(sounds.bipsound) end
+local function cloisterDing() loop(sounds.cloister) end
+local function bipsound() loop(sounds.bipsound) end
 local function deniedFlight() play(sounds.denied) end
 
--- Interface graphique
+-- Interface graphique améliorée
 local buttons = {
     {x=2, y=4, w=20, h=3, text="Startup", action=startup},
     {x=2, y=8, w=20, h=3, text="Shutdown", action=shutdown},
@@ -104,6 +122,7 @@ local buttons = {
     {x=25, y=20, w=20, h=3, text="Denied Flight", action=deniedFlight}
 }
 
+-- Dessiner boutons
 local function drawButton(btn, pressed)
     local bg, fg = colors.black, colors.orange
     if pressed then bg, fg = colors.orange, colors.black end
@@ -113,6 +132,7 @@ local function drawButton(btn, pressed)
     term.write(btn.text)
 end
 
+-- Dessiner UI
 local function drawUI()
     term.clear()
     local w,h = term.getSize()
@@ -120,24 +140,30 @@ local function drawUI()
     term.setTextColor(colors.orange)
     term.setCursorPos(math.floor((w-#title)/2)+1, 1)
     term.write(title)
-    for _, btn in ipairs(buttons) do drawButton(btn, false) end
+
+    -- Dessiner boutons
+    for _, btn in ipairs(buttons) do drawButton(btn,false) end
+
+    -- Forcer la barre de lecture tout en bas
+    paintutils.drawFilledBox(1, h, w, h, colors.black)
 end
 
+-- Gestion touch
 local function handleTouch(x, y)
     for _, btn in ipairs(buttons) do
         if x>=btn.x and x<=btn.x+btn.w-1 and y>=btn.y and y<=btn.y+btn.h-1 then
-            drawButton(btn, true)
+            drawButton(btn,true)
             btn.action()
             os.sleep(0.1)
-            drawButton(btn, false)
+            drawButton(btn,false)
             break
         end
     end
 end
 
--- Lancement interface
+-- Lancer interface
 drawUI()
 while true do
     local event, side, x, y = os.pullEvent("mouse_click")
-    handleTouch(x, y)
+    handleTouch(x,y)
 end
