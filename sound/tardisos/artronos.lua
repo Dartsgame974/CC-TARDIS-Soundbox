@@ -325,15 +325,27 @@ local function terminal_interface_loop()
         display.clear()
         local w, h = display.getSize()
         
-        -- Titre en haut à gauche
+        -- Cadre décoratif supérieur
         display.setCursorPos(1, 1)
         display.setTextColor(colors.orange)
-        display.write("ARTRON OS TYPE 40")
+        display.write(string.rep("=", w))
         
-        -- Bouton POWER juste en dessous du titre
+        -- Titre centré
+        local title = "[ ARTRON OS TYPE 40 ]"
+        display.setCursorPos(math.floor((w - #title) / 2) + 1, 2)
+        display.setTextColor(colors.orange)
+        display.write(title)
+        
+        -- Cadre décoratif inférieur titre
+        display.setCursorPos(1, 3)
+        display.setTextColor(colors.orange)
+        display.write(string.rep("=", w))
+        
+        -- Bouton POWER centré en haut
         local power_b = button_defs[1]
         local power_text = power_b.text_func()
-        display.setCursorPos(1, 2)
+        local power_full = "[ " .. power_text .. " ]"
+        display.setCursorPos(math.floor((w - #power_full) / 2) + 1, 5)
         if power_b.is_active() then
             display.setBackgroundColor(colors.orange)
             display.setTextColor(colors.white)
@@ -341,31 +353,21 @@ local function terminal_interface_loop()
             display.setBackgroundColor(colors.brown)
             display.setTextColor(colors.orange)
         end
-        display.write("[" .. power_text .. "]")
-        power_b.curr_x = 1
-        power_b.curr_y = 2
-        power_b.curr_w = #power_text + 2
+        display.write(power_full)
+        power_b.curr_x = math.floor((w - #power_full) / 2) + 1
+        power_b.curr_y = 5
+        power_b.curr_w = #power_full
         power_b.curr_h = 1
         
-        -- Ligne de séparation
-        display.setCursorPos(1, 3)
-        display.setBackgroundColor(colors.black)
-        display.setTextColor(colors.orange)
-        display.write(string.rep("-", w))
-        
-        -- Autres boutons en haut à droite
+        -- Autres boutons centrés verticalement au milieu
         local other_buttons = {button_defs[4], button_defs[5], button_defs[6], button_defs[7], button_defs[8]}
-        local max_other_w = 0
-        for _, b in ipairs(other_buttons) do
-            local btn_text = b.text or b.text_func()
-            max_other_w = math.max(max_other_w, #btn_text + 2)
-        end
-        local other_x = w - max_other_w + 1
-        local other_y = 4
+        local mid_y = math.floor(h / 2) - 2
+        
         for i, b in ipairs(other_buttons) do
-            local y = other_y + i - 1
+            local y = mid_y + (i - 1) * 2
             local btn_text = b.text or b.text_func()
-            display.setCursorPos(other_x, y)
+            local btn_full = "[ " .. btn_text .. " ]"
+            display.setCursorPos(math.floor((w - #btn_full) / 2) + 1, y)
             if b.is_active() then
                 display.setBackgroundColor(colors.orange)
                 display.setTextColor(colors.white)
@@ -373,78 +375,96 @@ local function terminal_interface_loop()
                 display.setBackgroundColor(colors.brown)
                 display.setTextColor(colors.orange)
             end
-            display.write("[" .. btn_text .. "]")
-            b.curr_x = other_x
+            display.write(btn_full)
+            b.curr_x = math.floor((w - #btn_full) / 2) + 1
             b.curr_y = y
-            b.curr_w = #btn_text + 2
+            b.curr_w = #btn_full
             b.curr_h = 1
         end
         
-        -- Flight status/boutons en bas: TAKEOFF | FLIGHT | LANDING
-        local flight_text = "FLIGHT"
+        -- Status RP en bas (avant les boutons de vol)
+        display.setBackgroundColor(colors.black)
+        local sys_status = powered and "SYSTEMS ONLINE" or "SYSTEMS OFFLINE"
+        local audio_sys = "AUDIO RELAYS: " .. #speakers
+        local comms_sys = chat_box and "COMMS LINK: ACTIVE" or "COMMS LINK: OFFLINE"
+        
+        local status_y = h - 5
+        display.setCursorPos(math.floor((w - #sys_status) / 2) + 1, status_y)
+        display.setTextColor(powered and colors.lime or colors.red)
+        display.write(sys_status)
+        
+        display.setCursorPos(math.floor((w - #audio_sys) / 2) + 1, status_y + 1)
+        display.setTextColor(colors.lightBlue)
+        display.write(audio_sys)
+        
+        display.setCursorPos(math.floor((w - #comms_sys) / 2) + 1, status_y + 2)
+        display.setTextColor(chat_box and colors.lime or colors.gray)
+        display.write(comms_sys)
+        
+        -- Boutons de vol en bas avec status au centre
         local takeoff_b = button_defs[2]
         local landing_b = button_defs[3]
         local is_in_flight = current_loop == "tardis_flight_loop"
-        local takeoff_text = takeoff_b.text
-        local landing_text = landing_b.text
-        local total_width = #takeoff_text + 2 + #flight_text + 2 + #landing_text + 2 + 4
+        
+        -- Déterminer le status à afficher
+        local status_text
+        if is_in_flight then
+            status_text = "FLIGHT..."
+        elseif powered and current_loop ~= "tardis_flight_loop" then
+            status_text = "LANDED..."
+        else
+            status_text = "STANDBY..."
+        end
+        
+        local takeoff_text = "[ TAKEOFF... ]"
+        local landing_text = "[ LANDING... ]"
+        local spacing = 3
+        local total_width = #takeoff_text + spacing + #status_text + spacing + #landing_text
         local flight_start_x = math.floor((w - total_width) / 2) + 1
         
         -- TAKEOFF button
         display.setCursorPos(flight_start_x, h)
-        if takeoff_b.is_active() then
+        if powered and current_loop ~= "tardis_flight_loop" then
             display.setBackgroundColor(colors.orange)
             display.setTextColor(colors.white)
         else
             display.setBackgroundColor(colors.brown)
             display.setTextColor(colors.orange)
         end
-        display.write("[" .. takeoff_text .. "]")
+        display.write(takeoff_text)
         takeoff_b.curr_x = flight_start_x
         takeoff_b.curr_y = h
-        takeoff_b.curr_w = #takeoff_text + 2
+        takeoff_b.curr_w = #takeoff_text
         takeoff_b.curr_h = 1
         
-        -- | FLIGHT |
-        local flight_x = flight_start_x + takeoff_b.curr_w + 2
-        display.setCursorPos(flight_x, h)
+        -- Status au centre (non cliquable)
+        local status_x = flight_start_x + #takeoff_text + spacing
+        display.setCursorPos(status_x, h)
         display.setBackgroundColor(colors.black)
-        display.setTextColor(colors.orange)
         if is_in_flight then
-            display.setBackgroundColor(colors.orange)
-            display.setTextColor(colors.white)
+            display.setTextColor(colors.yellow)
+        elseif powered then
+            display.setTextColor(colors.lime)
+        else
+            display.setTextColor(colors.gray)
         end
-        display.write("[" .. flight_text .. "]")
+        display.write(status_text)
         
         -- LANDING button
-        local landing_x = flight_x + #flight_text + 2 + 2
+        local landing_x = status_x + #status_text + spacing
         display.setCursorPos(landing_x, h)
-        if landing_b.is_active() then
+        if powered and current_loop == "tardis_flight_loop" then
             display.setBackgroundColor(colors.orange)
             display.setTextColor(colors.white)
         else
             display.setBackgroundColor(colors.brown)
             display.setTextColor(colors.orange)
         end
-        display.write("[" .. landing_text .. "]")
+        display.write(landing_text)
         landing_b.curr_x = landing_x
         landing_b.curr_y = h
-        landing_b.curr_w = #landing_text + 2
+        landing_b.curr_w = #landing_text
         landing_b.curr_h = 1
-        
-        -- Status lines
-        local status_lines = {
-            "TARDIS Status: " .. get_status_text(),
-            "Speakers Connected: " .. #speakers,
-            "Chat Box: " .. (chat_box and "Connected" or "Not Connected")
-        }
-        local status_start_y = h - #status_lines - 1
-        for i, line in ipairs(status_lines) do
-            display.setCursorPos(math.floor((w - #line) / 2) + 1, status_start_y + i - 1)
-            display.setTextColor(colors.orange)
-            display.setBackgroundColor(colors.black)
-            display.write(line)
-        end
         
         display.setBackgroundColor(colors.black)
         display.setTextColor(colors.white)
