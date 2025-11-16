@@ -53,13 +53,6 @@ local function update_redstone()
     rs.setOutput("right", powered)
 end
 
--- Function to check redstone input for landing
-local function check_redstone_landing()
-    if rs.getInput("left") then
-        landing()
-    end
-end
-
 -- Function to send chat message if chat_box connected
 local function send_chat(message)
     if chat_box then
@@ -150,6 +143,13 @@ local function landing()
     table.insert(pending_actions, {type = "play", sound = "landing"})
     table.insert(pending_actions, {type = "set_loop", loop = "ambiance"})
     os.queueEvent("audio_action")
+end
+
+-- Function to check redstone input for landing
+local function check_redstone_landing()
+    if rs.getInput("left") then
+        landing()
+    end
 end
 
 local function short_flight_func()
