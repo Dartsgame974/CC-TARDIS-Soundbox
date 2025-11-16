@@ -24,18 +24,34 @@ if #speakers == 0 then
     error("No speakers connected!")
 end
 
+-- Find chat_box
+local chat_box = peripheral.find("chatBox")
+
 -- Loop display names
 local loop_names = {
     ambiance = "AMBIANCE",
     tardis_flight_loop = "FLIGHT",
-    cloister = "CLOISTER",
+    cloister_ding = "CLOISTER",
     bip_sound_error_1 = "BIP"
 }
 
 -- Global state
 local powered = false
+local door_state = "closed"  -- initial door closed
 local current_loop = nil
 local pending_actions = {}
+
+-- Function to update redstone
+local function update_redstone()
+    rs.setOutput("bottom", powered)
+end
+
+-- Function to send chat message if chat_box connected
+local function send_chat(message)
+    if chat_box then
+        chat_box.sendMessage("&e" .. message)
+    end
+end
 
 -- Function to play a stream
 local function play_stream(sound)
@@ -89,24 +105,24 @@ local function play_temp(sound)
 end
 
 -- Logic functions
-local function power_on()
-    if powered then return end
-    powered = true
-    table.insert(pending_actions, {type = "play", sound = "startup_tardis"})
-    table.insert(pending_actions, {type = "set_loop", loop = "ambiance"})
-    os.queueEvent("audio_action")
-end
-
-local function power_off()
-    if not powered then return end
-    powered = false
-    table.insert(pending_actions, {type = "set_loop", loop = nil})
-    table.insert(pending_actions, {type = "play", sound = "shutdowntardis"})
-    os.queueEvent("audio_action")
+local function power_toggle()
+    if powered then
+        powered = false
+        table.insert(pending_actions, {type = "set_loop", loop = nil})
+        table.insert(pending_actions, {type = "play", sound = "shutdowntardis"})
+        os.queueEvent("audio_action")
+    else
+        powered = true
+        table.insert(pending_actions, {type = "play", sound = "startup_tardis"})
+        table.insert(pending_actions, {type = "set_loop", loop = "ambiance"})
+        os.queueEvent("audio_action")
+    end
+    update_redstone()
 end
 
 local function takeoff()
     if not powered then return end
+    send_chat("TARDIS is taking off!")
     table.insert(pending_actions, {type = "set_loop", loop = nil})
     table.insert(pending_actions, {type = "play", sound = "tardistakeoff"})
     table.insert(pending_actions, {type = "set_loop", loop = "tardis_flight_loop"})
@@ -115,6 +131,7 @@ end
 
 local function landing()
     if not powered then return end
+    send_chat("TARDIS is landing!")
     table.insert(pending_actions, {type = "set_loop", loop = nil})
     table.insert(pending_actions, {type = "play", sound = "landing"})
     table.insert(pending_actions, {type = "set_loop", loop = "ambiance"})
@@ -131,10 +148,10 @@ end
 
 local function cloister_toggle()
     if not powered then return end
-    if current_loop == "cloister" then
+    if current_loop == "cloister_ding" then
         current_loop = "ambiance"
     else
-        current_loop = "cloister"
+        current_loop = "cloister_ding"
     end
     os.queueEvent("audio_action")
 end
@@ -149,58 +166,60 @@ local function bip_toggle()
     os.queueEvent("audio_action")
 end
 
-local function door_open()
-    play_temp("door_open")
-end
-
-local function door_close()
-    play_temp("close_door")
+local function door_toggle()
+    if not powered then return end
+    if door_state == "closed" then
+        play_temp("door_open")
+        door_state = "open"
+    else
+        play_temp("close_door")
+        door_state = "closed"
+    end
 end
 
 -- Interface loop
 local function interface_loop()
     local button_defs = {
-        {text = "POWER ON", action = power_on, is_active = function() return not powered end, can_click = function() return not powered end},
-        {text = "POWER OFF", action = power_off, is_active = function() return powered end, can_click = function() return powered end},
+        {text_func = function() return powered and "POWER OFF" or "POWER ON" end, action = power_toggle, is_active = function() return true end, can_click = function() return true end},
         {text = "TAKEOFF", action = takeoff, is_active = function() return powered end, can_click = function() return powered end},
         {text = "LANDING", action = landing, is_active = function() return powered end, can_click = function() return powered end},
         {text = "SHORT FLIGHT", action = short_flight_func, is_active = function() return powered end, can_click = function() return powered end},
         {text = "DENIED", action = denied, is_active = function() return powered end, can_click = function() return powered end},
-        {text = "CLOISTER", action = cloister_toggle, is_active = function() return powered and current_loop == "cloister" end, can_click = function() return powered end},
+        {text = "CLOISTER", action = cloister_toggle, is_active = function() return powered and current_loop == "cloister_ding" end, can_click = function() return powered end},
         {text = "ERROR BIP", action = bip_toggle, is_active = function() return powered and current_loop == "bip_sound_error_1" end, can_click = function() return powered end},
-        {text = "OPEN DOOR", action = door_open, is_active = function() return powered end, can_click = function() return powered end},
-        {text = "CLOSE DOOR", action = door_close, is_active = function() return powered end, can_click = function() return powered end},
+        {text_func = function() return door_state == "closed" and "OPEN DOOR" or "CLOSE DOOR" end, action = door_toggle, is_active = function() return powered end, can_click = function() return powered end},
     }
+
+    local function get_status_text()
+        local status = powered and "ACTIVE" or "INACTIVE"
+        if powered and current_loop == "tardis_flight_loop" then
+            status = status .. " (IN FLIGHT)"
+        end
+        return status
+    end
 
     local function redraw()
         term.setBackgroundColor(colors.black)
         term.clear()
         local w, h = term.getSize()
-        -- Title
-        local title = "ARTRON OS TYPE 40"
-        term.setCursorPos(math.floor((w - #title) / 2) + 1, 1)
+        -- Title to left
+        term.setCursorPos(1, 1)
         term.setTextColor(colors.orange)
-        term.write(title)
-        -- Status
-        term.setCursorPos(2, 3)
-        term.write("TARDIS Status: " .. (powered and "ACTIVE" or "INACTIVE"))
-        term.setCursorPos(2, 4)
-        term.write("Speakers Connected: " .. #speakers)
-        term.setCursorPos(2, 5)
-        term.write("Active Loop: " .. (loop_names[current_loop] or "None"))
-        -- Calculate max left width
+        term.write("ARTRON OS TYPE 40")
+        -- Buttons at top, in two columns
         local max_left_w = 0
-        for i = 1, 5 do
-            local left = button_defs[2 * i - 1]
-            max_left_w = math.max(max_left_w, #left.text + 2)
+        for i = 1, 4 do
+            local left_text = button_defs[2 * i - 1].text or button_defs[2 * i - 1].text_func()
+            max_left_w = math.max(max_left_w, #left_text + 2)
         end
-        local left_x = 2
+        local left_x = math.floor((w - (max_left_w * 2 + 4)) / 2) + 1  -- center the two columns
         local right_x = left_x + max_left_w + 2
-        local start_y = 7
-        for i = 1, 5 do
+        local start_y = 3
+        for i = 1, 4 do
             local y = start_y + i - 1
             -- Left button
             local left = button_defs[2 * i - 1]
+            local btn_text = left.text or left.text_func()
             term.setCursorPos(left_x, y)
             if left.is_active() then
                 term.setBackgroundColor(colors.orange)
@@ -209,14 +228,14 @@ local function interface_loop()
                 term.setBackgroundColor(colors.brown)
                 term.setTextColor(colors.orange)
             end
-            local btn_text = "[" .. left.text .. "]"
-            term.write(btn_text)
+            term.write("[" .. btn_text .. "]")
             left.curr_x = left_x
             left.curr_y = y
-            left.curr_w = #btn_text
+            left.curr_w = #btn_text + 2
             left.curr_h = 1
             -- Right button
             local right = button_defs[2 * i]
+            local btn_text_right = right.text or right.text_func()
             term.setCursorPos(right_x, y)
             if right.is_active() then
                 term.setBackgroundColor(colors.orange)
@@ -225,16 +244,32 @@ local function interface_loop()
                 term.setBackgroundColor(colors.brown)
                 term.setTextColor(colors.orange)
             end
-            btn_text = "[" .. right.text .. "]"
-            term.write(btn_text)
+            term.write("[" .. btn_text_right .. "]")
             right.curr_x = right_x
             right.curr_y = y
-            right.curr_w = #btn_text
+            right.curr_w = #btn_text_right + 2
             right.curr_h = 1
+        end
+        -- Status at bottom, centered
+        local status_lines = {
+            "TARDIS Status: " .. get_status_text(),
+            "Speakers Connected: " .. #speakers,
+            "Chat Box: " .. (chat_box and "Connected" or "Not Connected"),
+            "Active Loop: " .. (loop_names[current_loop] or "None")
+        }
+        local status_start_y = h - #status_lines
+        for i, line in ipairs(status_lines) do
+            term.setCursorPos(math.floor((w - #line) / 2) + 1, status_start_y + i - 1)
+            term.setTextColor(colors.orange)
+            term.setBackgroundColor(colors.black)
+            term.write(line)
         end
         term.setBackgroundColor(colors.black)
         term.setTextColor(colors.white)
     end
+
+    -- Initial redstone
+    update_redstone()
 
     while true do
         redraw()
