@@ -50,7 +50,14 @@ local pending_actions = {}
 
 -- Function to update redstone
 local function update_redstone()
-    rs.setOutput("bottom", powered)
+    rs.setOutput("right", powered)
+end
+
+-- Function to check redstone input for landing
+local function check_redstone_landing()
+    if rs.getInput("left") then
+        landing()
+    end
 end
 
 -- Function to send chat message if chat_box connected
@@ -191,9 +198,9 @@ local function monitor_interface_loop()
     local display = monitor
     
     local button_defs = {
-        {id = "power", text_func = function() return powered and "OFF" or "ON" end, action = power_toggle, can_click = function() return true end},
-        {id = "takeoff", text = "TK", action = takeoff, can_click = function() return powered and current_loop ~= "tardis_flight_loop" end},
-        {id = "landing", text = "LD", action = landing, can_click = function() return powered and current_loop == "tardis_flight_loop" end},
+        {id = "power", text_func = function() return powered and "POWER OFF" or "POWER ON" end, action = power_toggle, can_click = function() return true end},
+        {id = "takeoff", text = "TAKEOFF", action = takeoff, can_click = function() return powered and current_loop ~= "tardis_flight_loop" end},
+        {id = "landing", text = "LANDING", action = landing, can_click = function() return powered and current_loop == "tardis_flight_loop" end},
     }
     
     local function redraw()
@@ -201,69 +208,97 @@ local function monitor_interface_loop()
         display.clear()
         local w, h = display.getSize()
         
-        -- Titre
+        -- Cadre supérieur décoratif
         display.setCursorPos(1, 1)
         display.setTextColor(colors.orange)
-        display.write("ARTRON OS")
+        display.write(string.rep("=", w))
         
-        -- Bouton POWER en haut à gauche
+        -- Titre centré avec style
+        local title = "[ ARTRON OS ]"
+        display.setCursorPos(math.floor((w - #title) / 2) + 1, 3)
+        display.setTextColor(colors.orange)
+        display.setBackgroundColor(colors.black)
+        display.write(title)
+        
+        -- Cadre inférieur titre
+        display.setCursorPos(1, 5)
+        display.setTextColor(colors.orange)
+        display.write(string.rep("=", w))
+        
+        -- Bouton POWER centré
         local power_b = button_defs[1]
-        local power_text = power_b.text_func()
-        display.setCursorPos(1, 2)
+        local power_text = "[ " .. power_b.text_func() .. " ]"
+        local power_y = math.floor(h / 2) - 2
+        display.setCursorPos(math.floor((w - #power_text) / 2) + 1, power_y)
         if powered then
             display.setBackgroundColor(colors.orange)
             display.setTextColor(colors.white)
         else
-            display.setBackgroundColor(colors.brown)
-            display.setTextColor(colors.orange)
+            display.setBackgroundColor(colors.gray)
+            display.setTextColor(colors.lightGray)
         end
-        display.write("[" .. power_text .. "]")
-        power_b.curr_x = 1
-        power_b.curr_y = 2
-        power_b.curr_w = #power_text + 2
+        display.write(power_text)
+        power_b.curr_x = math.floor((w - #power_text) / 2) + 1
+        power_b.curr_y = power_y
+        power_b.curr_w = #power_text
         power_b.curr_h = 1
         
-        -- Boutons TK et LD centrés
+        display.setBackgroundColor(colors.black)
+        
+        -- Séparateur
+        display.setCursorPos(1, power_y + 2)
+        display.setTextColor(colors.orange)
+        display.write(string.rep("-", w))
+        
+        -- Boutons TAKEOFF et LANDING en bas
         local takeoff_b = button_defs[2]
         local landing_b = button_defs[3]
-        local mid_y = math.floor(h / 2)
         
-        -- TAKEOFF
-        display.setCursorPos(math.floor(w / 2) - 3, mid_y)
+        local tk_text = "[ " .. takeoff_b.text .. " ]"
+        local ld_text = "[ " .. landing_b.text .. " ]"
+        
+        -- TAKEOFF centré
+        local tk_y = h - 4
+        display.setCursorPos(math.floor((w - #tk_text) / 2) + 1, tk_y)
         if powered and current_loop ~= "tardis_flight_loop" then
             display.setBackgroundColor(colors.orange)
             display.setTextColor(colors.white)
         else
-            display.setBackgroundColor(colors.brown)
-            display.setTextColor(colors.orange)
+            display.setBackgroundColor(colors.gray)
+            display.setTextColor(colors.lightGray)
         end
-        display.write("[" .. takeoff_b.text .. "]")
-        takeoff_b.curr_x = math.floor(w / 2) - 3
-        takeoff_b.curr_y = mid_y
-        takeoff_b.curr_w = #takeoff_b.text + 2
+        display.write(tk_text)
+        takeoff_b.curr_x = math.floor((w - #tk_text) / 2) + 1
+        takeoff_b.curr_y = tk_y
+        takeoff_b.curr_w = #tk_text
         takeoff_b.curr_h = 1
         
-        -- LANDING
-        display.setCursorPos(math.floor(w / 2) - 3, mid_y + 2)
+        display.setBackgroundColor(colors.black)
+        
+        -- LANDING centré
+        local ld_y = h - 2
+        display.setCursorPos(math.floor((w - #ld_text) / 2) + 1, ld_y)
         if powered and current_loop == "tardis_flight_loop" then
             display.setBackgroundColor(colors.orange)
             display.setTextColor(colors.white)
         else
-            display.setBackgroundColor(colors.brown)
-            display.setTextColor(colors.orange)
+            display.setBackgroundColor(colors.gray)
+            display.setTextColor(colors.lightGray)
         end
-        display.write("[" .. landing_b.text .. "]")
-        landing_b.curr_x = math.floor(w / 2) - 3
-        landing_b.curr_y = mid_y + 2
-        landing_b.curr_w = #landing_b.text + 2
+        display.write(ld_text)
+        landing_b.curr_x = math.floor((w - #ld_text) / 2) + 1
+        landing_b.curr_y = ld_y
+        landing_b.curr_w = #ld_text
         landing_b.curr_h = 1
         
-        -- Status FLIGHT en bas si en vol
+        display.setBackgroundColor(colors.black)
+        
+        -- Status FLIGHT centré en bas
+        local status_text = "FLIGHT"
         if current_loop == "tardis_flight_loop" then
-            display.setCursorPos(math.floor((w - 6) / 2) + 1, h)
-            display.setBackgroundColor(colors.orange)
-            display.setTextColor(colors.white)
-            display.write("FLIGHT")
+            display.setCursorPos(math.floor((w - #status_text) / 2) + 1, h)
+            display.setTextColor(colors.yellow)
+            display.write(status_text)
         end
         
         display.setBackgroundColor(colors.black)
@@ -292,6 +327,10 @@ local function monitor_interface_loop()
                 if clicked then
                     break
                 end
+            elseif event == "redstone" then
+                -- Vérifier le signal redstone pour landing
+                check_redstone_landing()
+                break
             end
         end
     end
@@ -493,6 +532,10 @@ local function terminal_interface_loop()
                 if clicked then
                     break
                 end
+            elseif event == "redstone" then
+                -- Vérifier le signal redstone pour landing
+                check_redstone_landing()
+                break
             end
         end
     end
