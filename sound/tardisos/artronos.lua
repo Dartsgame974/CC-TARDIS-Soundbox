@@ -416,8 +416,8 @@ local function terminal_interface_loop()
             status_text = "STANDBY..."
         end
         
-        local takeoff_text = "[ TAKEOFF... ]"
-        local landing_text = "[ LANDING... ]"
+        local takeoff_text = "[ TAKEOFF ]"
+        local landing_text = "[ LANDING ]"
         local spacing = 3
         local total_width = #takeoff_text + spacing + #status_text + spacing + #landing_text
         local flight_start_x = math.floor((w - total_width) / 2) + 1
